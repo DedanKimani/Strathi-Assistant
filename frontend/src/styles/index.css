@@ -1,0 +1,10 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Optional: brand CSS vars you might use later */
+:root {
+  --brand-red: #C8102E;
+  --brand-blue: #0033A0;
+  --brand-gold: #EAAA00;
+}

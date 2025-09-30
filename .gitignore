@@ -1,0 +1,19 @@
+# Python
+*.pyc
+__pycache__/
+.env
+*.env
+token.json
+credentials/*.json
+
+# Node
+node_modules/
+dist/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
