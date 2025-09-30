@@ -17,3 +17,7 @@ dist/
 # OS
 .DS_Store
 Thumbs.db
+client_secret_*.json
+
+*.json
+!package.json
