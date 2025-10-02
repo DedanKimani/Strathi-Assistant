@@ -1,6 +1,6 @@
 # backend/strathy_app/app.py
 import os
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'  # local dev over http
 from pathlib import Path
 from typing import Optional
 
@@ -21,7 +21,6 @@ from .services.gmail_service import (
 )
 from .utils.email_parser import parse_message
 from .utils.mime_helpers import build_reply_mime
-
 
 load_dotenv()
 
@@ -87,31 +86,32 @@ def auth_callback(request: Request):
     request.session.pop("oauth_state", None)
     return RedirectResponse(url="/gmail/unread")
 
-# ===== Demo: list a few unread messages =====
+# ===== Gmail: list a few unread messages (FULL BODY) =====
 @app.get("/gmail/unread")
 def gmail_unread():
     creds = _load_creds()
     if not creds:
         return RedirectResponse("/oauth2/login")
     service = build_gmail_service(creds)
-    msgs = list_unread_messages(service, max_results=5)
-    # Fetch a short preview for convenience
-    previews = []
+    msgs = list_unread_messages(service, max_results=30)
+
+    items = []
     for m in msgs:
         full = get_message(service, m["id"])
         if not full:
             continue
-        parsed = parse_message(full)
-        previews.append({
+        parsed = parse_message(full)  # expects keys: text, html, sender, subject, thread_id, message_id
+        items.append({
             "id": parsed["message_id"],
             "threadId": parsed["thread_id"],
             "from": parsed["sender"],
             "subject": parsed["subject"],
-            "body_preview": (parsed["body"] or "")[:200],
+            "body": parsed.get("text", "") or "",        # full plain text
+            "html_body": parsed.get("html", "") or "",   # full HTML if available
         })
-    return JSONResponse(previews)
+    return JSONResponse(items)
 
-# ===== Demo: reply to a message =====
+# ===== Gmail: reply to a message =====
 @app.post("/gmail/reply")
 def gmail_reply(
     message_id: str = Body(..., embed=True),

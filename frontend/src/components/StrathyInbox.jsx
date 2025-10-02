@@ -186,9 +186,12 @@ export default function StrathyInbox() {
                 <div className="mt-2 text-2xl font-semibold">{selected.subject || "(no subject)"}</div>
               </div>
               <div className="p-4">
-                <pre className="whitespace-pre-wrap text-sm text-slate-700 bg-slate-50 border rounded-xl p-4 max-h-[40vh] overflow-auto">
-                  {selected.body_preview || "(no preview)"}
-                </pre>
+                <div className="whitespace-pre-wrap text-sm text-slate-700 bg-slate-50 border rounded-xl p-4 max-h-[40vh] overflow-auto">
+                  <div
+                    className="text-sm"
+                    dangerouslySetInnerHTML={{ __html: selected.html_body || selected.body }}
+                  />
+                </div>
               </div>
 
               <div className="mt-auto p-4 border-t bg-gradient-to-br from-white to-slate-50">
