@@ -1,8 +1,10 @@
 # backend/strathy_app/app.py
 import os
-os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'  # local dev over http
+os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
+
 from pathlib import Path
 from typing import Optional
+import logging
 
 from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.responses import RedirectResponse, JSONResponse
@@ -12,17 +14,24 @@ from dotenv import load_dotenv
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 
+from apscheduler.schedulers.background import BackgroundScheduler
+
 from .config import SCOPES, CREDENTIALS_FILE, TOKEN_FILE
+
 from .services.gmail_service import (
     build_gmail_service,
     list_unread_messages,
     get_message,
     send_mime,
+    process_incoming_email,  # AI reply integration
 )
 from .utils.email_parser import parse_message
 from .utils.mime_helpers import build_reply_mime
 
+
+# ====== Setup ======
 load_dotenv()
+logging.basicConfig(level=logging.INFO)
 
 # IMPORTANT: keep SECRET_KEY constant across restarts/workers
 SECRET_KEY = os.getenv("SECRET_KEY", "change-this-to-a-long-random-string")
@@ -31,6 +40,8 @@ BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")  # exact domain for ca
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
+
+# ====== Token Management ======
 def _save_creds(creds: Credentials):
     Path(TOKEN_FILE).write_text(creds.to_json(), encoding="utf-8")
 
@@ -42,9 +53,12 @@ def _load_creds() -> Optional[Credentials]:
     except Exception:
         return None
 
+
+# ====== Routes ======
 @app.get("/")
 def index():
     return {"ok": True, "message": "Strathy OAuth demo. Visit /oauth2/login to begin."}
+
 
 # ===== OAuth: Login → Google consent =====
 @app.get("/oauth2/login")
@@ -62,6 +76,7 @@ def auth_login(request: Request):
     )
     request.session["oauth_state"] = state
     return RedirectResponse(authorization_url)
+
 
 # ===== OAuth: Callback from Google =====
 @app.get("/oauth2callback")
@@ -86,32 +101,60 @@ def auth_callback(request: Request):
     request.session.pop("oauth_state", None)
     return RedirectResponse(url="/gmail/unread")
 
-# ===== Gmail: list a few unread messages (FULL BODY) =====
+
+# ===== Demo: list unread messages (student queries + optional AI replies) =====
 @app.get("/gmail/unread")
 def gmail_unread():
     creds = _load_creds()
     if not creds:
         return RedirectResponse("/oauth2/login")
     service = build_gmail_service(creds)
-    msgs = list_unread_messages(service, max_results=30)
+    msgs = list_unread_messages(service, max_results=1)
 
-    items = []
+    previews = []
     for m in msgs:
         full = get_message(service, m["id"])
         if not full:
             continue
-        parsed = parse_message(full)  # expects keys: text, html, sender, subject, thread_id, message_id
-        items.append({
+        parsed = parse_message(full)
+        previews.append({
             "id": parsed["message_id"],
             "threadId": parsed["thread_id"],
             "from": parsed["sender"],
             "subject": parsed["subject"],
-            "body": parsed.get("text", "") or "",        # full plain text
-            "html_body": parsed.get("html", "") or "",   # full HTML if available
+            "student_query": (parsed["body"] or ""),  # ✅ Always show student’s query
+            "ai_reply": None,                         # Will be filled later if replied
+            "role": "student"
         })
-    return JSONResponse(items)
+    return JSONResponse(previews)
 
-# ===== Gmail: reply to a message =====
+
+# ===== Fetch latest AI reply (returns both student + AI messages) =====
+@app.get("/gmail/last-reply")
+def gmail_last_reply():
+    creds = _load_creds()
+    if not creds:
+        return RedirectResponse("/oauth2/login")
+
+    service = build_gmail_service(creds)
+    unread = list_unread_messages(service, max_results=1)
+    if not unread:
+        return {"ok": False, "message": "No recent AI replies"}
+
+    msg = unread[0]
+    result = process_incoming_email(service, msg)
+    if result:
+        return {
+            "ok": True,
+            "subject": result["subject"],
+            "student_query": result.get("original_body", ""),  # ✅ student query preserved
+            "ai_reply": result.get("ai_reply", ""),            # ✅ AI reply shown separately
+            "role": result["role"]
+        }
+    return {"ok": False, "message": "No AI reply generated"}
+
+
+# ===== Demo: reply manually to a message =====
 @app.post("/gmail/reply")
 def gmail_reply(
     message_id: str = Body(..., embed=True),
@@ -143,7 +186,7 @@ def gmail_reply(
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
 
-    # Build RFC-2822 MIME reply (+ In-Reply-To / References)
+    # Build RFC-2822 MIME reply
     raw_mime = build_reply_mime(
         to_email=to_email,
         subject=subject,
@@ -152,7 +195,29 @@ def gmail_reply(
         original_headers=original.get("payload", {}).get("headers", []),
     )
 
-    # Send using messages.send with threadId to keep it in the same thread
+    # Send reply
     sent = send_mime(service, raw_mime, thread_id=thread_id)
 
     return JSONResponse({"ok": True, "sent_id": sent.get("id"), "threadId": sent.get("threadId")})
+
+
+# ===== Auto Reply Job (Anthropic AI) =====
+def auto_reply_job():
+    creds = _load_creds()
+    if not creds:
+        logging.info("No creds available yet. Skipping auto-reply job.")
+        return
+
+    try:
+        service = build_gmail_service(creds)
+        unread = list_unread_messages(service, max_results=1)
+        if not unread:
+            logging.info("No unread messages found.")
+            return
+
+        first_msg = unread[0]
+        result = process_incoming_email(service, first_msg)
+        if result:
+            logging.info(f"✅ Auto-replied to {result['to']} | Subject: {result['subject']}")
+    except Exception as e:
+        logging.error(f"Auto-reply job failed: {e}")

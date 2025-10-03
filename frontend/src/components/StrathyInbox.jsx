@@ -1,8 +1,16 @@
 import { useEffect, useMemo, useState } from "react";
-import { Mail, Send, RefreshCcw, Inbox, Loader2, ArrowLeft, Search, CheckCircle2 } from "lucide-react";
+import {
+  Mail,
+  Send,
+  RefreshCcw,
+  Inbox,
+  Loader2,
+  ArrowLeft,
+  Search,
+  CheckCircle2,
+  AlertTriangle,
+} from "lucide-react";
 
-// --- Brand palette (approx. Strathmore crest colours) ---
-// Primary Red, Royal Blue, Gold Accent
 const BRAND = {
   red: "#C8102E",
   blue: "#0033A0",
@@ -21,7 +29,7 @@ export default function StrathyInbox() {
   const [sent, setSent] = useState(false);
   const [filter, setFilter] = useState("");
 
-  // Fetch unread messages from backend
+  // --- Fetch unread (student only) ---
   const fetchUnread = async () => {
     setError("");
     setLoading(true);
@@ -30,19 +38,21 @@ export default function StrathyInbox() {
       const res = await fetch("/gmail/unread");
       if (!res.ok) {
         if (res.status === 307 || res.redirected) {
-          // likely needs login
           window.location.href = "/oauth2/login";
           return;
         }
         throw new Error(`Failed to load messages (${res.status})`);
       }
       const data = await res.json();
-      setMessages(Array.isArray(data) ? data : []);
-      if (Array.isArray(data) && data.length > 0) {
-        setSelected(data[0]);
-      } else {
-        setSelected(null);
-      }
+      // Ensure each item has: id, threadId (optional), from, subject, body_preview
+      const withRoles = (Array.isArray(data) ? data : []).map((m) => ({
+        ...m,
+        role: "student",
+        status: "new",
+      }));
+      setMessages(withRoles);
+      if (withRoles.length > 0) setSelected(withRoles[0]);
+      else setSelected(null);
     } catch (e) {
       setError(e.message || "Something went wrong");
     } finally {
@@ -54,16 +64,52 @@ export default function StrathyInbox() {
     fetchUnread();
   }, []);
 
+  // Poll AI replies every 20s and update both messages and selected if it matches
+  useEffect(() => {
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch("/gmail/last-reply");
+        if (!res.ok) return;
+        const data = await res.json();
+        if (data.ok && data.ai_reply && data.thread_id) {
+          setMessages((prev) =>
+            prev.map((m) =>
+              // match either message id or threadId (backend may use threadId)
+              m.id === data.thread_id || m.threadId === data.thread_id
+                ? { ...m, ai_reply: data.ai_reply, status: "replied" }
+                : m
+            )
+          );
+
+          // update selected view if it's the one that got AI reply
+          setSelected((cur) => {
+            if (!cur) return cur;
+            if (cur.id === data.thread_id || cur.threadId === data.thread_id) {
+              return { ...cur, ai_reply: data.ai_reply, status: "replied" };
+            }
+            return cur;
+          });
+        }
+      } catch (err) {
+        console.error("Polling failed", err);
+      }
+    }, 20000);
+    return () => clearInterval(interval);
+  }, []);
+
+  const studentQueries = useMemo(() => messages.filter((m) => m.role === "student"), [messages]);
+
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return messages;
-    return messages.filter((m) =>
+    if (!q) return studentQueries;
+    return studentQueries.filter((m) =>
       [m.subject, m.from, m.body_preview]
         .filter(Boolean)
         .some((t) => String(t).toLowerCase().includes(q))
     );
-  }, [messages, filter]);
+  }, [studentQueries, filter]);
 
+  // --- Send reply (manual) ---
   const onSend = async () => {
     if (!selected) return;
     if (!reply.trim()) return alert("Type a reply first ✍️");
@@ -78,6 +124,9 @@ export default function StrathyInbox() {
       if (!res.ok) throw new Error(`Send failed (${res.status})`);
       setSent(true);
       setReply("");
+      // mark locally as replied
+      setMessages((prev) => prev.map((m) => (m.id === selected.id ? { ...m, status: "replied" } : m)));
+      setSelected((s) => (s ? { ...s, status: "replied" } : s));
     } catch (e) {
       alert(e.message || "Failed to send");
     } finally {
@@ -85,156 +134,193 @@ export default function StrathyInbox() {
     }
   };
 
-  return (
-    <div className="min-h-screen w-full" style={{ background: BRAND.soft }}>
-      {/* Header */}
-      <header
-        className="w-full border-b shadow-sm"
-        style={{
-          background: `linear-gradient(120deg, ${BRAND.red} 0%, ${BRAND.blue} 100%)`,
-          color: "white",
-        }}
-      >
-        <div className="max-w-6xl mx-auto px-4 py-4 flex items-center gap-3">
-          <div className="w-9 h-9 rounded-xl bg-white/15 grid place-items-center">
-            <Mail className="w-5 h-5" />
-          </div>
-          <div className="flex flex-col">
-            <h1 className="text-xl font-semibold tracking-tight">Strathy – Admin Assistant</h1>
-            <p className="text-xs opacity-80">Strathmore University • Gmail triage</p>
-          </div>
-          <div className="ml-auto flex items-center gap-2">
-            <button
-              onClick={fetchUnread}
-              className="px-3 py-2 rounded-lg bg-white/15 hover:bg-white/25 transition text-sm flex items-center gap-2"
-              title="Refresh"
-            >
-              <RefreshCcw className="w-4 h-4" /> Refresh
-            </button>
-          </div>
-        </div>
-      </header>
+  // --- Escalate ---
+  const onEscalate = (msgId) => {
+    setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, status: "escalated" } : m)));
+    setSelected((s) => (s && s.id === msgId ? { ...s, status: "escalated" } : s));
+    alert("Message escalated 🚨");
+  };
 
-      {/* Main layout */}
-      <main className="max-w-6xl mx-auto p-4 grid grid-cols-1 md:grid-cols-3 gap-4">
-        {/* Inbox column */}
-        <section className="md:col-span-1 rounded-2xl border bg-white shadow-sm overflow-hidden">
-          <div className="p-3 border-b flex items-center gap-2">
-            <div className="relative flex-1">
-              <Search className="w-4 h-4 absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" />
+  return (
+    <div className="min-h-screen w-full flex items-start justify-center p-6" style={{ background: BRAND.soft }}>
+      <div className="w-full max-w-7xl rounded-2xl shadow-md overflow-hidden bg-white">
+        {/* Header */}
+        <header
+          className="w-full border-b rounded-t-2xl"
+          style={{
+            background: `linear-gradient(120deg, ${BRAND.red} 0%, ${BRAND.blue} 100%)`,
+            color: "white",
+          }}
+        >
+          <div className="px-6 py-4 flex items-center gap-3">
+            <Mail className="w-6 h-6" />
+            <h1 className="text-xl font-semibold">Strathy – Admin Assistant</h1>
+            <div className="ml-auto">
+              <button
+                onClick={fetchUnread}
+                className="px-3 py-2 rounded-lg bg-white/15 hover:bg-white/25 transition text-sm flex items-center gap-2"
+              >
+                <RefreshCcw className="w-4 h-4" /> Refresh
+              </button>
+            </div>
+          </div>
+        </header>
+
+        {/* Main */}
+        <main className="flex">
+          {/* Sidebar */}
+          <aside className="w-80 border-r bg-white flex flex-col">
+            <div className="p-3 border-b flex items-center gap-2">
+              <Search className="w-4 h-4 text-slate-400" />
               <input
                 value={filter}
                 onChange={(e) => setFilter(e.target.value)}
-                placeholder="Search unread…"
-                className="w-full pl-9 pr-3 py-2 rounded-lg border focus:outline-none focus:ring-2 focus:ring-[var(--brand)]"
-                style={{
-                  // subtle brand ring
-                  // @ts-ignore
-                  ["--brand"]: BRAND.red,
-                }}
+                placeholder="Search queries…"
+                className="flex-1 px-2 py-2 text-sm rounded border"
               />
             </div>
-            <div className="px-2 py-1 rounded-md text-xs" style={{ background: BRAND.gold, color: BRAND.slate }}>
-              {messages.length}
-            </div>
-          </div>
 
-          <div className="max-h-[70vh] overflow-auto">
-            {loading && (
-              <div className="p-6 flex items-center justify-center gap-2 text-slate-500">
-                <Loader2 className="w-4 h-4 animate-spin" /> Loading…
-              </div>
-            )}
-            {!loading && filtered.length === 0 && (
-              <div className="p-6 text-center text-slate-500">
-                <Inbox className="w-6 h-6 mx-auto mb-2 opacity-60" />
-                No unread messages
-              </div>
-            )}
-            {!loading && filtered.map((m) => (
-              <button
-                key={m.id}
-                onClick={() => setSelected(m)}
-                className={`w-full text-left px-4 py-3 border-b hover:bg-slate-50 transition ${
-                  selected?.id === m.id ? "bg-slate-50" : "bg-white"
-                }`}
-              >
-                <div className="flex items-start gap-2">
-                  <div className="mt-0.5 w-2 h-2 rounded-full" style={{ background: BRAND.red }} />
-                  <div className="min-w-0">
-                    <div className="text-sm font-medium truncate">{m.subject || "(no subject)"}</div>
-                    <div className="text-xs text-slate-500 truncate">{m.from}</div>
-                    <div className="text-xs text-slate-500 line-clamp-2 mt-1">{m.body_preview}</div>
-                  </div>
+            <div className="flex-1 overflow-auto">
+              {loading && (
+                <div className="p-6 text-center text-slate-500 flex items-center justify-center gap-2">
+                  <Loader2 className="w-4 h-4 animate-spin" /> Loading…
                 </div>
-              </button>
-            ))}
-          </div>
-        </section>
+              )}
 
-        {/* Reader + reply */}
-        <section className="md:col-span-2 rounded-2xl border bg-white shadow-sm">
-          {!selected ? (
-            <div className="p-10 text-center text-slate-500">
-              <ArrowLeft className="w-6 h-6 mx-auto mb-2" /> Select a message
-            </div>
-          ) : (
-            <div className="flex flex-col h-full">
-              <div className="p-4 border-b">
-                <div className="text-xs uppercase tracking-wide mb-1" style={{ color: BRAND.blue }}>From</div>
-                <div className="font-medium">{selected.from}</div>
-                <div className="mt-2 text-2xl font-semibold">{selected.subject || "(no subject)"}</div>
-              </div>
-              <div className="p-4">
-                <div className="whitespace-pre-wrap text-sm text-slate-700 bg-slate-50 border rounded-xl p-4 max-h-[40vh] overflow-auto">
-                  <div
-                    className="text-sm"
-                    dangerouslySetInnerHTML={{ __html: selected.html_body || selected.body }}
-                  />
+              {!loading && filtered.length === 0 && (
+                <div className="p-6 text-center text-slate-500">
+                  <Inbox className="w-6 h-6 mx-auto mb-2 opacity-60" />
+                  No queries
                 </div>
-              </div>
+              )}
 
-              <div className="mt-auto p-4 border-t bg-gradient-to-br from-white to-slate-50">
-                <div className="mb-2 text-xs uppercase tracking-wide" style={{ color: BRAND.blue }}>Your reply</div>
-                <textarea
-                  value={reply}
-                  onChange={(e) => setReply(e.target.value)}
-                  placeholder="Type your response…"
-                  className="w-full min-h-[120px] p-3 rounded-xl border focus:outline-none focus:ring-2"
-                  style={{
-                    borderColor: "#E2E8F0",
-                    // @ts-ignore
-                    ["--ring-color"]: BRAND.red,
-                  }}
-                />
-
-                <div className="mt-3 flex items-center gap-3">
+              {!loading &&
+                filtered.map((m) => (
                   <button
-                    onClick={onSend}
-                    disabled={sending || !reply.trim()}
-                    className="px-4 py-2 rounded-xl text-white flex items-center gap-2 shadow-sm disabled:opacity-60"
-                    style={{ background: BRAND.red }}
+                    key={m.id}
+                    onClick={() => setSelected(m)}
+                    className={`w-full text-left px-4 py-3 border-b hover:bg-slate-50 transition ${
+                      selected?.id === m.id ? "bg-slate-100" : "bg-white"
+                    }`}
                   >
-                    {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />} {sending ? "Sending…" : "Send reply"}
+                    <div className="flex justify-between items-center">
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium text-sm truncate">{m.subject || "(no subject)"}</div>
+                        <div className="text-xs text-slate-500 truncate mt-1">{m.body_preview}</div>
+                      </div>
+                      <div className="ml-3 text-right">
+                        <div className="text-xs text-slate-400">{m.from ? m.from.split("<")[0].trim() : ""}</div>
+                        <div className="mt-1">
+                          {m.status === "replied" && <span className="text-xs text-green-600">Replied</span>}
+                          {m.status === "escalated" && <span className="text-xs text-red-600">Escalated</span>}
+                          {m.status === "new" && <span className="text-xs text-slate-400">New</span>}
+                        </div>
+                      </div>
+                    </div>
                   </button>
-                  {sent && (
-                    <span className="inline-flex items-center gap-1 text-sm" style={{ color: BRAND.blue }}>
-                      <CheckCircle2 className="w-4 h-4" /> Reply sent
-                    </span>
-                  )}
-                </div>
-              </div>
+                ))}
             </div>
-          )}
-        </section>
-      </main>
+          </aside>
 
-      {/* Footer */}
-      <footer className="max-w-6xl mx-auto px-4 py-6 text-xs text-slate-500">
-        <span className="opacity-80">Made for Strathmore University</span>
-        <span className="mx-2">•</span>
-        <span className="opacity-60">Theme: Red/Blue/Gold</span>
-      </footer>
+          {/* Reader */}
+          <section className="flex-1 p-6 flex flex-col gap-4">
+            {!selected ? (
+              <div className="p-8 rounded-xl border text-center text-slate-500">
+                <ArrowLeft className="w-6 h-6 mx-auto mb-2" /> Select a query
+              </div>
+            ) : (
+              <>
+                {/* Student message card */}
+                <div className="rounded-xl border p-4 bg-white shadow-sm">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.blue }}>
+                        Student Query
+                      </div>
+                      <div className="font-semibold text-lg">{selected.subject || "(no subject)"}</div>
+                      <div className="text-xs text-slate-500 mt-1">{selected.from}</div>
+                    </div>
+                    <div className="text-sm">
+                      {selected.status === "replied" && (
+                        <span className="px-2 py-1 rounded-full text-xs bg-green-50 text-green-700">Replied</span>
+                      )}
+                      {selected.status === "escalated" && (
+                        <span className="px-2 py-1 rounded-full text-xs bg-red-50 text-red-700">Escalated</span>
+                      )}
+                      {selected.status === "new" && (
+                        <span className="px-2 py-1 rounded-full text-xs bg-slate-50 text-slate-600">New</span>
+                      )}
+                    </div>
+                  </div>
+
+                  <div className="mt-4 text-sm text-slate-700 whitespace-pre-wrap">{selected.body_preview}</div>
+                </div>
+
+                {/* Model reply card (shows immediately below student query) */}
+                {selected.ai_reply ? (
+                  <div className="rounded-xl border p-4 bg-slate-50">
+                    <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.red }}>
+                      Strathy AI Response
+                    </div>
+                    <div className="mt-2 text-sm text-slate-800 whitespace-pre-wrap">{selected.ai_reply}</div>
+                  </div>
+                ) : (
+                  // placeholder when AI hasn't replied yet
+                  <div className="rounded-xl border p-4 bg-white/30 text-slate-500">
+                    <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.red }}>
+                      Strathy AI Response
+                    </div>
+                    <div className="mt-2 text-sm">No automated response yet.</div>
+                  </div>
+                )}
+
+                {/* Admin reply / actions */}
+                {selected.status !== "escalated" ? (
+                  <div className="mt-auto rounded-xl border p-4 bg-white">
+                    <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BRAND.blue }}>
+                      Your reply
+                    </div>
+                    <textarea
+                      value={reply}
+                      onChange={(e) => setReply(e.target.value)}
+                      placeholder="Type your reply…"
+                      className="w-full min-h-[140px] p-3 rounded-xl border"
+                    />
+                    <div className="mt-3 flex items-center gap-3">
+                      <button
+                        onClick={onSend}
+                        disabled={sending || !reply.trim()}
+                        className="px-4 py-2 rounded-xl text-white shadow-sm disabled:opacity-60"
+                        style={{ background: BRAND.red }}
+                      >
+                        {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                        {sending ? " Sending…" : " Send reply"}
+                      </button>
+
+                      <button
+                        onClick={() => onEscalate(selected.id)}
+                        className="px-4 py-2 rounded-xl flex items-center gap-2 text-red-600 border border-red-600"
+                      >
+                        <AlertTriangle className="w-4 h-4" /> Escalate
+                      </button>
+
+                      {sent && (
+                        <span className="inline-flex items-center gap-1 text-sm" style={{ color: BRAND.blue }}>
+                          <CheckCircle2 className="w-4 h-4" /> Reply sent
+                        </span>
+                      )}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-auto rounded-xl border p-4 bg-white/50 text-red-600">
+                    This message has been escalated — please follow up manually.
+                  </div>
+                )}
+              </>
+            )}
+          </section>
+        </main>
+      </div>
     </div>
   );
 }
