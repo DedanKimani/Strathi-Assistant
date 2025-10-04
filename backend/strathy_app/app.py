@@ -112,7 +112,7 @@ def gmail_unread():
         return RedirectResponse("/oauth2/login")
 
     service = build_gmail_service(creds)
-    msgs = list_unread_messages(service, max_results=1)
+    msgs = list_unread_messages(service, max_results=5)
 
     previews = []
     for m in msgs:
