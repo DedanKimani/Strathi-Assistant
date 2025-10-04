@@ -8,6 +8,7 @@ import logging
 
 from fastapi import FastAPI, Request, HTTPException, Body
 from fastapi.responses import RedirectResponse, JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 
@@ -24,28 +25,35 @@ from .services.gmail_service import (
     get_message,
     send_mime,
     process_incoming_email,
-    get_ai_reply_for_thread,  # ✅ added import
+    get_ai_reply_for_thread,
 )
 from .utils.email_parser import parse_message
 from .utils.mime_helpers import build_reply_mime
-
 
 # ====== Setup ======
 load_dotenv()
 logging.basicConfig(level=logging.INFO)
 
-# IMPORTANT: keep SECRET_KEY constant across restarts/workers
+# ====== FastAPI App ======
 SECRET_KEY = os.getenv("SECRET_KEY", "change-this-to-a-long-random-string")
-BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")  # exact domain for callback
+BASE_URL = os.getenv("BASE_URL", "http://localhost:8000")
 
 app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
+# ====== CORS ======
+origins = ["http://localhost:3000"]  # React dev server
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # ====== Token Management ======
 def _save_creds(creds: Credentials):
     Path(TOKEN_FILE).write_text(creds.to_json(), encoding="utf-8")
-
 
 def _load_creds() -> Optional[Credentials]:
     if not Path(TOKEN_FILE).exists():
@@ -55,17 +63,15 @@ def _load_creds() -> Optional[Credentials]:
     except Exception:
         return None
 
-
 # ====== Routes ======
 @app.get("/")
 def index():
     return {"ok": True, "message": "Strathy OAuth demo. Visit /oauth2/login to begin."}
 
-
 # ===== OAuth: Login → Google consent =====
 @app.get("/oauth2/login")
 def auth_login(request: Request):
-    redirect_uri = f"{BASE_URL}/oauth2callback"  # must match Google Console redirect
+    redirect_uri = f"{BASE_URL}/oauth2callback"
     flow = Flow.from_client_secrets_file(
         CREDENTIALS_FILE,
         scopes=SCOPES,
@@ -74,13 +80,12 @@ def auth_login(request: Request):
     authorization_url, state = flow.authorization_url(
         access_type="offline",
         include_granted_scopes="true",
-        prompt="consent",  # ensures refresh_token first time
+        prompt="consent",
     )
     request.session["oauth_state"] = state
     return RedirectResponse(authorization_url)
 
-
-# ===== OAuth: Callback from Google =====
+# ===== OAuth Callback =====
 @app.get("/oauth2callback")
 def auth_callback(request: Request):
     expected_state = request.session.get("oauth_state")
@@ -96,25 +101,27 @@ def auth_callback(request: Request):
         redirect_uri=redirect_uri,
     )
 
-    authorization_response = str(request.url)  # full URL with code & state
+    authorization_response = str(request.url)
     flow.fetch_token(authorization_response=authorization_response)
     creds = flow.credentials
     _save_creds(creds)
     request.session.pop("oauth_state", None)
     return RedirectResponse(url="/gmail/unread")
 
-
-# ===== Updated: list unread messages (student + AI replies) =====
+# ===== List unread messages =====
 @app.get("/gmail/unread")
 def gmail_unread():
     creds = _load_creds()
     if not creds:
-        return RedirectResponse("/oauth2/login")
+        return JSONResponse({"ok": False, "message": "Not logged in"}, status_code=401)
 
     service = build_gmail_service(creds)
-    msgs = list_unread_messages(service, max_results=5)
+    if not service:
+        return JSONResponse({"ok": False, "message": "Failed to connect to Gmail"}, status_code=500)
 
+    msgs = list_unread_messages(service, max_results=5)
     previews = []
+
     for m in msgs:
         full = get_message(service, m["id"])
         if not full:
@@ -122,29 +129,26 @@ def gmail_unread():
 
         parsed = parse_message(full)
         thread_id = parsed["thread_id"]
-
-        # ✅ Try to fetch AI reply in the same thread
         ai_reply = get_ai_reply_for_thread(service, thread_id)
 
         previews.append({
-            "id": parsed["message_id"],
+            "id": parsed.get("message_id"),
             "threadId": thread_id,
-            "from": parsed["sender"],
-            "subject": parsed["subject"],
-            "student_query": parsed["body"] or "",
-            "ai_reply": ai_reply,  # ✅ include AI reply text
+            "from": parsed.get("sender"),
+            "subject": parsed.get("subject"),
+            "student_query": parsed.get("body") or "",
+            "ai_reply": ai_reply,
             "role": "student"
         })
 
     return JSONResponse(previews)
 
-
-# ===== Fetch latest AI reply (returns both student + AI messages) =====
+# ===== Fetch latest AI reply =====
 @app.get("/gmail/last-reply")
 def gmail_last_reply():
     creds = _load_creds()
     if not creds:
-        return RedirectResponse("/oauth2/login")
+        return JSONResponse({"ok": False, "message": "Not logged in"}, status_code=401)
 
     service = build_gmail_service(creds)
     unread = list_unread_messages(service, max_results=1)
@@ -163,40 +167,28 @@ def gmail_last_reply():
         }
     return {"ok": False, "message": "No AI reply generated"}
 
-
-# ===== Manual reply to a message =====
+# ===== Manual reply =====
 @app.post("/gmail/reply")
 def gmail_reply(
     message_id: str = Body(..., embed=True),
     body_text: str = Body(..., embed=True),
 ):
-    """
-    Example JSON:
-    {
-      "message_id": "185f0a...abc",
-      "body_text": "Hi! Thanks for reaching out..."
-    }
-    """
     creds = _load_creds()
     if not creds:
-        return RedirectResponse("/oauth2/login")
+        return JSONResponse({"ok": False, "message": "Not logged in"}, status_code=401)
 
     service = build_gmail_service(creds)
-
-    # Get original message to extract headers/thread
     original = get_message(service, message_id)
     if not original:
         raise HTTPException(status_code=404, detail="Original message not found")
 
-    # Parse for headers and thread info
     parsed = parse_message(original)
     thread_id = parsed["thread_id"]
-    to_email = (parsed["sender"] or "").split("<")[-1].strip(">")
-    subject = parsed["subject"] or "(no subject)"
+    to_email = (parsed.get("sender") or "").split("<")[-1].strip(">")
+    subject = parsed.get("subject") or "(no subject)"
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
 
-    # Build RFC-2822 MIME reply
     raw_mime = build_reply_mime(
         to_email=to_email,
         subject=subject,
@@ -208,8 +200,7 @@ def gmail_reply(
     sent = send_mime(service, raw_mime, thread_id=thread_id)
     return JSONResponse({"ok": True, "sent_id": sent.get("id"), "threadId": sent.get("threadId")})
 
-
-# ===== Auto Reply Job (Anthropic AI) =====
+# ===== Auto Reply Job =====
 def auto_reply_job():
     creds = _load_creds()
     if not creds:

@@ -149,10 +149,10 @@ export default function StrathyInbox() {
           color: "white",
         }}
       >
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center gap-3">
+        <div className="max-w-7xl mx-auto px-6 py-3.5 flex items-center gap-3">
           <Mail className="w-6 h-6" />
-          <h1 className="text-xl font-semibold">Strathy – Admin Assistant</h1>
-          <p className="text-xs opacity-80">Strathmore University</p>
+          <h1 className="text-xl font-semibold">Strathmore SCES Communication Inbox</h1>
+
           <div className="ml-auto">
             <button
               onClick={fetchUnread}
