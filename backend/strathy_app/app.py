@@ -23,7 +23,8 @@ from .services.gmail_service import (
     list_unread_messages,
     get_message,
     send_mime,
-    process_incoming_email,  # AI reply integration
+    process_incoming_email,
+    get_ai_reply_for_thread,  # ✅ added import
 )
 from .utils.email_parser import parse_message
 from .utils.mime_helpers import build_reply_mime
@@ -44,6 +45,7 @@ app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 # ====== Token Management ======
 def _save_creds(creds: Credentials):
     Path(TOKEN_FILE).write_text(creds.to_json(), encoding="utf-8")
+
 
 def _load_creds() -> Optional[Credentials]:
     if not Path(TOKEN_FILE).exists():
@@ -102,12 +104,13 @@ def auth_callback(request: Request):
     return RedirectResponse(url="/gmail/unread")
 
 
-# ===== Demo: list unread messages (student queries + optional AI replies) =====
+# ===== Updated: list unread messages (student + AI replies) =====
 @app.get("/gmail/unread")
 def gmail_unread():
     creds = _load_creds()
     if not creds:
         return RedirectResponse("/oauth2/login")
+
     service = build_gmail_service(creds)
     msgs = list_unread_messages(service, max_results=1)
 
@@ -116,16 +119,23 @@ def gmail_unread():
         full = get_message(service, m["id"])
         if not full:
             continue
+
         parsed = parse_message(full)
+        thread_id = parsed["thread_id"]
+
+        # ✅ Try to fetch AI reply in the same thread
+        ai_reply = get_ai_reply_for_thread(service, thread_id)
+
         previews.append({
             "id": parsed["message_id"],
-            "threadId": parsed["thread_id"],
+            "threadId": thread_id,
             "from": parsed["sender"],
             "subject": parsed["subject"],
-            "student_query": (parsed["body"] or ""),  # ✅ Always show student’s query
-            "ai_reply": None,                         # Will be filled later if replied
+            "student_query": parsed["body"] or "",
+            "ai_reply": ai_reply,  # ✅ include AI reply text
             "role": "student"
         })
+
     return JSONResponse(previews)
 
 
@@ -147,14 +157,14 @@ def gmail_last_reply():
         return {
             "ok": True,
             "subject": result["subject"],
-            "student_query": result.get("original_body", ""),  # ✅ student query preserved
-            "ai_reply": result.get("ai_reply", ""),            # ✅ AI reply shown separately
+            "student_query": result.get("original_body", ""),
+            "ai_reply": result.get("ai_reply", ""),
             "role": result["role"]
         }
     return {"ok": False, "message": "No AI reply generated"}
 
 
-# ===== Demo: reply manually to a message =====
+# ===== Manual reply to a message =====
 @app.post("/gmail/reply")
 def gmail_reply(
     message_id: str = Body(..., embed=True),
@@ -170,6 +180,7 @@ def gmail_reply(
     creds = _load_creds()
     if not creds:
         return RedirectResponse("/oauth2/login")
+
     service = build_gmail_service(creds)
 
     # Get original message to extract headers/thread
@@ -180,7 +191,6 @@ def gmail_reply(
     # Parse for headers and thread info
     parsed = parse_message(original)
     thread_id = parsed["thread_id"]
-    # "From" contains display name + email; we reply to the email address
     to_email = (parsed["sender"] or "").split("<")[-1].strip(">")
     subject = parsed["subject"] or "(no subject)"
     if not subject.lower().startswith("re:"):
@@ -195,9 +205,7 @@ def gmail_reply(
         original_headers=original.get("payload", {}).get("headers", []),
     )
 
-    # Send reply
     sent = send_mime(service, raw_mime, thread_id=thread_id)
-
     return JSONResponse({"ok": True, "sent_id": sent.get("id"), "threadId": sent.get("threadId")})
 
 

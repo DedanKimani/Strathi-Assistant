@@ -29,7 +29,7 @@ export default function StrathyInbox() {
   const [sent, setSent] = useState(false);
   const [filter, setFilter] = useState("");
 
-  // --- Fetch unread (student only) ---
+  // --- Fetch unread (student + AI replies) ---
   const fetchUnread = async () => {
     setError("");
     setLoading(true);
@@ -44,14 +44,16 @@ export default function StrathyInbox() {
         throw new Error(`Failed to load messages (${res.status})`);
       }
       const data = await res.json();
-      // Ensure each item has: id, threadId (optional), from, subject, body_preview
-      const withRoles = (Array.isArray(data) ? data : []).map((m) => ({
+
+      // Ensure proper structure
+      const normalized = (Array.isArray(data) ? data : []).map((m) => ({
         ...m,
         role: "student",
-        status: "new",
+        status: m.ai_reply ? "replied" : "new",
       }));
-      setMessages(withRoles);
-      if (withRoles.length > 0) setSelected(withRoles[0]);
+
+      setMessages(normalized);
+      if (normalized.length > 0) setSelected(normalized[0]);
       else setSelected(null);
     } catch (e) {
       setError(e.message || "Something went wrong");
@@ -64,31 +66,26 @@ export default function StrathyInbox() {
     fetchUnread();
   }, []);
 
-  // Poll AI replies every 20s and update both messages and selected if it matches
+  // Poll backend for latest AI replies every 20s
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
         const res = await fetch("/gmail/last-reply");
         if (!res.ok) return;
         const data = await res.json();
-        if (data.ok && data.ai_reply && data.thread_id) {
+        if (data.ok && data.ai_reply && data.subject) {
           setMessages((prev) =>
             prev.map((m) =>
-              // match either message id or threadId (backend may use threadId)
-              m.id === data.thread_id || m.threadId === data.thread_id
+              m.subject === data.subject
                 ? { ...m, ai_reply: data.ai_reply, status: "replied" }
                 : m
             )
           );
-
-          // update selected view if it's the one that got AI reply
-          setSelected((cur) => {
-            if (!cur) return cur;
-            if (cur.id === data.thread_id || cur.threadId === data.thread_id) {
-              return { ...cur, ai_reply: data.ai_reply, status: "replied" };
-            }
-            return cur;
-          });
+          setSelected((cur) =>
+            cur && cur.subject === data.subject
+              ? { ...cur, ai_reply: data.ai_reply, status: "replied" }
+              : cur
+          );
         }
       } catch (err) {
         console.error("Polling failed", err);
@@ -97,19 +94,18 @@ export default function StrathyInbox() {
     return () => clearInterval(interval);
   }, []);
 
-  const studentQueries = useMemo(() => messages.filter((m) => m.role === "student"), [messages]);
-
+  // Filter
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
-    if (!q) return studentQueries;
-    return studentQueries.filter((m) =>
-      [m.subject, m.from, m.body_preview]
+    if (!q) return messages;
+    return messages.filter((m) =>
+      [m.subject, m.from, m.student_query]
         .filter(Boolean)
         .some((t) => String(t).toLowerCase().includes(q))
     );
-  }, [studentQueries, filter]);
+  }, [messages, filter]);
 
-  // --- Send reply (manual) ---
+  // --- Send manual reply ---
   const onSend = async () => {
     if (!selected) return;
     if (!reply.trim()) return alert("Type a reply first ✍️");
@@ -124,8 +120,10 @@ export default function StrathyInbox() {
       if (!res.ok) throw new Error(`Send failed (${res.status})`);
       setSent(true);
       setReply("");
-      // mark locally as replied
-      setMessages((prev) => prev.map((m) => (m.id === selected.id ? { ...m, status: "replied" } : m)));
+      // Mark as replied locally
+      setMessages((prev) =>
+        prev.map((m) => (m.id === selected.id ? { ...m, status: "replied" } : m))
+      );
       setSelected((s) => (s ? { ...s, status: "replied" } : s));
     } catch (e) {
       alert(e.message || "Failed to send");
@@ -136,7 +134,9 @@ export default function StrathyInbox() {
 
   // --- Escalate ---
   const onEscalate = (msgId) => {
-    setMessages((prev) => prev.map((m) => (m.id === msgId ? { ...m, status: "escalated" } : m)));
+    setMessages((prev) =>
+      prev.map((m) => (m.id === msgId ? { ...m, status: "escalated" } : m))
+    );
     setSelected((s) => (s && s.id === msgId ? { ...s, status: "escalated" } : s));
     alert("Message escalated 🚨");
   };
@@ -205,15 +205,27 @@ export default function StrathyInbox() {
                   >
                     <div className="flex justify-between items-center">
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium text-sm truncate">{m.subject || "(no subject)"}</div>
-                        <div className="text-xs text-slate-500 truncate mt-1">{m.body_preview}</div>
+                        <div className="font-medium text-sm truncate">
+                          {m.subject || "(no subject)"}
+                        </div>
+                        <div className="text-xs text-slate-500 truncate mt-1">
+                          {m.student_query || ""}
+                        </div>
                       </div>
                       <div className="ml-3 text-right">
-                        <div className="text-xs text-slate-400">{m.from ? m.from.split("<")[0].trim() : ""}</div>
+                        <div className="text-xs text-slate-400">
+                          {m.from ? m.from.split("<")[0].trim() : ""}
+                        </div>
                         <div className="mt-1">
-                          {m.status === "replied" && <span className="text-xs text-green-600">Replied</span>}
-                          {m.status === "escalated" && <span className="text-xs text-red-600">Escalated</span>}
-                          {m.status === "new" && <span className="text-xs text-slate-400">New</span>}
+                          {m.status === "replied" && (
+                            <span className="text-xs text-green-600">Replied</span>
+                          )}
+                          {m.status === "escalated" && (
+                            <span className="text-xs text-red-600">Escalated</span>
+                          )}
+                          {m.status === "new" && (
+                            <span className="text-xs text-slate-400">New</span>
+                          )}
                         </div>
                       </div>
                     </div>
@@ -230,7 +242,7 @@ export default function StrathyInbox() {
               </div>
             ) : (
               <>
-                {/* Student message card */}
+                {/* Student message */}
                 <div className="rounded-xl border p-4 bg-white shadow-sm">
                   <div className="flex items-center justify-between">
                     <div>
@@ -242,30 +254,39 @@ export default function StrathyInbox() {
                     </div>
                     <div className="text-sm">
                       {selected.status === "replied" && (
-                        <span className="px-2 py-1 rounded-full text-xs bg-green-50 text-green-700">Replied</span>
+                        <span className="px-2 py-1 rounded-full text-xs bg-green-50 text-green-700">
+                          Replied
+                        </span>
                       )}
                       {selected.status === "escalated" && (
-                        <span className="px-2 py-1 rounded-full text-xs bg-red-50 text-red-700">Escalated</span>
+                        <span className="px-2 py-1 rounded-full text-xs bg-red-50 text-red-700">
+                          Escalated
+                        </span>
                       )}
                       {selected.status === "new" && (
-                        <span className="px-2 py-1 rounded-full text-xs bg-slate-50 text-slate-600">New</span>
+                        <span className="px-2 py-1 rounded-full text-xs bg-slate-50 text-slate-600">
+                          New
+                        </span>
                       )}
                     </div>
                   </div>
 
-                  <div className="mt-4 text-sm text-slate-700 whitespace-pre-wrap">{selected.body_preview}</div>
+                  <div className="mt-4 text-sm text-slate-700 whitespace-pre-wrap">
+                    {selected.student_query}
+                  </div>
                 </div>
 
-                {/* Model reply card (shows immediately below student query) */}
+                {/* AI reply card */}
                 {selected.ai_reply ? (
                   <div className="rounded-xl border p-4 bg-slate-50">
                     <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.red }}>
                       Strathy AI Response
                     </div>
-                    <div className="mt-2 text-sm text-slate-800 whitespace-pre-wrap">{selected.ai_reply}</div>
+                    <div className="mt-2 text-sm text-slate-800 whitespace-pre-wrap">
+                      {selected.ai_reply}
+                    </div>
                   </div>
                 ) : (
-                  // placeholder when AI hasn't replied yet
                   <div className="rounded-xl border p-4 bg-white/30 text-slate-500">
                     <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.red }}>
                       Strathy AI Response
@@ -274,7 +295,7 @@ export default function StrathyInbox() {
                   </div>
                 )}
 
-                {/* Admin reply / actions */}
+                {/* Admin reply box */}
                 {selected.status !== "escalated" ? (
                   <div className="mt-auto rounded-xl border p-4 bg-white">
                     <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BRAND.blue }}>
@@ -290,10 +311,14 @@ export default function StrathyInbox() {
                       <button
                         onClick={onSend}
                         disabled={sending || !reply.trim()}
-                        className="px-4 py-2 rounded-xl text-white shadow-sm disabled:opacity-60"
+                        className="px-4 py-2 rounded-xl text-white shadow-sm disabled:opacity-60 flex items-center gap-2"
                         style={{ background: BRAND.red }}
                       >
-                        {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                        {sending ? (
+                          <Loader2 className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Send className="w-4 h-4" />
+                        )}
                         {sending ? " Sending…" : " Send reply"}
                       </button>
 
