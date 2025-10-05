@@ -9,6 +9,9 @@ import {
   Search,
   CheckCircle2,
   AlertTriangle,
+  Clock,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 
 const BRAND = {
@@ -28,8 +31,10 @@ export default function StrathyInbox() {
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [filter, setFilter] = useState("");
+  const [currentPage, setCurrentPage] = useState(1);
 
-  // --- Fetch unread messages ---
+  const pageSize = 50;
+
   const fetchUnread = async () => {
     setError("");
     setLoading(true);
@@ -54,6 +59,7 @@ export default function StrathyInbox() {
       setMessages(normalized);
       if (normalized.length > 0) setSelected(normalized[0]);
       else setSelected(null);
+      setCurrentPage(1);
     } catch (e) {
       setError(e.message || "Something went wrong");
     } finally {
@@ -65,7 +71,7 @@ export default function StrathyInbox() {
     fetchUnread();
   }, []);
 
-  // --- Poll for AI replies ---
+  // Polling for new AI replies
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -76,13 +82,23 @@ export default function StrathyInbox() {
           setMessages((prev) =>
             prev.map((m) =>
               m.subject === data.subject
-                ? { ...m, ai_reply: data.ai_reply, status: "replied" }
+                ? {
+                    ...m,
+                    ai_reply: data.ai_reply,
+                    ai_replied_at: new Date().toISOString(),
+                    status: "replied",
+                  }
                 : m
             )
           );
           setSelected((cur) =>
             cur && cur.subject === data.subject
-              ? { ...cur, ai_reply: data.ai_reply, status: "replied" }
+              ? {
+                  ...cur,
+                  ai_reply: data.ai_reply,
+                  ai_replied_at: new Date().toISOString(),
+                  status: "replied",
+                }
               : cur
           );
         }
@@ -93,7 +109,6 @@ export default function StrathyInbox() {
     return () => clearInterval(interval);
   }, []);
 
-  // --- Filter ---
   const filtered = useMemo(() => {
     const q = filter.trim().toLowerCase();
     if (!q) return messages;
@@ -104,7 +119,10 @@ export default function StrathyInbox() {
     );
   }, [messages, filter]);
 
-  // --- Send reply ---
+  const totalPages = Math.ceil(filtered.length / pageSize);
+  const startIndex = (currentPage - 1) * pageSize;
+  const paginated = filtered.slice(startIndex, startIndex + pageSize);
+
   const onSend = async () => {
     if (!selected) return;
     if (!reply.trim()) return alert("Type a reply first ✍️");
@@ -120,9 +138,15 @@ export default function StrathyInbox() {
       setSent(true);
       setReply("");
       setMessages((prev) =>
-        prev.map((m) => (m.id === selected.id ? { ...m, status: "replied" } : m))
+        prev.map((m) =>
+          m.id === selected.id
+            ? { ...m, status: "replied", ai_replied_at: new Date().toISOString() }
+            : m
+        )
       );
-      setSelected((s) => (s ? { ...s, status: "replied" } : s));
+      setSelected((s) =>
+        s ? { ...s, status: "replied", ai_replied_at: new Date().toISOString() } : s
+      );
     } catch (e) {
       alert(e.message || "Failed to send");
     } finally {
@@ -130,7 +154,6 @@ export default function StrathyInbox() {
     }
   };
 
-  // --- Escalate ---
   const onEscalate = (msgId) => {
     setMessages((prev) =>
       prev.map((m) => (m.id === msgId ? { ...m, status: "escalated" } : m))
@@ -140,10 +163,10 @@ export default function StrathyInbox() {
   };
 
   return (
-    <div className="min-h-screen w-full" style={{ background: BRAND.soft }}>
+    <div className="h-screen flex flex-col" style={{ background: BRAND.soft }}>
       {/* HEADER */}
       <header
-        className="w-full shadow-sm"
+        className="w-full shadow-sm flex-none"
         style={{
           background: `linear-gradient(120deg, ${BRAND.red} 0%, ${BRAND.blue} 100%)`,
           color: "white",
@@ -151,8 +174,9 @@ export default function StrathyInbox() {
       >
         <div className="max-w-7xl mx-auto px-6 py-3.5 flex items-center gap-3">
           <Mail className="w-6 h-6" />
-          <h1 className="text-xl font-semibold">Strathmore SCES Communication Inbox</h1>
-
+          <h1 className="text-xl font-semibold">
+            Strathmore SCES Communication Inbox
+          </h1>
           <div className="ml-auto">
             <button
               onClick={fetchUnread}
@@ -164,34 +188,37 @@ export default function StrathyInbox() {
         </div>
       </header>
 
-      {/* MAIN GRID */}
-      <main className="max-w-7xl mx-auto p-6 grid grid-cols-1 md:grid-cols-3 gap-6">
-        {/* INBOX */}
-        <aside className="rounded-2xl border bg-white shadow-sm overflow-hidden md:col-span-1">
-          <div className="p-3 border-b flex items-center gap-2">
+      {/* MAIN CONTENT */}
+      <main className="flex-1 flex overflow-hidden">
+        {/* INBOX LIST */}
+        <aside className="w-1/3 border-r bg-white overflow-y-auto flex flex-col">
+          <div className="p-3 border-b flex items-center gap-2 sticky top-0 bg-white z-10">
             <Search className="w-4 h-4 text-slate-400" />
             <input
               value={filter}
-              onChange={(e) => setFilter(e.target.value)}
+              onChange={(e) => {
+                setFilter(e.target.value);
+                setCurrentPage(1);
+              }}
               placeholder="Search queries…"
               className="flex-1 px-2 py-2 text-sm rounded border"
             />
           </div>
 
-          <div className="max-h-[75vh] overflow-auto">
+          <div className="flex-1 overflow-y-auto">
             {loading && (
               <div className="p-6 text-center text-slate-500 flex items-center justify-center gap-2">
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading…
               </div>
             )}
-            {!loading && filtered.length === 0 && (
+            {!loading && paginated.length === 0 && (
               <div className="p-6 text-center text-slate-500">
                 <Inbox className="w-6 h-6 mx-auto mb-2 opacity-60" />
                 No queries
               </div>
             )}
             {!loading &&
-              filtered.map((m) => (
+              paginated.map((m) => (
                 <button
                   key={m.id}
                   onClick={() => setSelected(m)}
@@ -199,13 +226,16 @@ export default function StrathyInbox() {
                     selected?.id === m.id ? "bg-slate-100" : "bg-white"
                   }`}
                 >
-                  <div className="flex justify-between items-center">
+                  <div className="flex justify-between items-start">
                     <div className="flex-1 min-w-0">
                       <div className="font-medium text-sm truncate">
                         {m.subject || "(no subject)"}
                       </div>
                       <div className="text-xs text-slate-500 truncate mt-1">
                         {m.student_query || ""}
+                      </div>
+                      <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
+                        <Clock className="w-3 h-3" /> {m.relative_time || "Unknown"}
                       </div>
                     </div>
                     <div className="ml-3 text-right">
@@ -228,41 +258,58 @@ export default function StrathyInbox() {
                 </button>
               ))}
           </div>
+
+          {/* Pagination Controls */}
+          {totalPages > 1 && (
+            <div className="p-3 border-t flex items-center justify-between bg-white sticky bottom-0">
+              <button
+                onClick={() => setCurrentPage((p) => Math.max(1, p - 1))}
+                disabled={currentPage === 1}
+                className="flex items-center gap-1 px-3 py-1 text-sm rounded border disabled:opacity-40"
+              >
+                <ChevronLeft className="w-4 h-4" /> Prev
+              </button>
+              <span className="text-sm text-slate-500">
+                Page {currentPage} of {totalPages}
+              </span>
+              <button
+                onClick={() => setCurrentPage((p) => Math.min(totalPages, p + 1))}
+                disabled={currentPage === totalPages}
+                className="flex items-center gap-1 px-3 py-1 text-sm rounded border disabled:opacity-40"
+              >
+                Next <ChevronRight className="w-4 h-4" />
+              </button>
+            </div>
+          )}
         </aside>
 
         {/* READER PANEL */}
-        <section className="md:col-span-2 rounded-2xl border bg-white shadow-sm p-6 flex flex-col gap-4">
+        <section className="flex-1 overflow-y-auto p-6 bg-white">
           {!selected ? (
-            <div className="p-8 rounded-xl border text-center text-slate-500">
+            <div className="p-8 rounded-xl border text-center text-slate-500 mt-20">
               <ArrowLeft className="w-6 h-6 mx-auto mb-2" /> Select a query
             </div>
           ) : (
             <>
-              {/* Student message */}
+              {/* Student Query */}
               <div className="rounded-xl border p-4 bg-white shadow-sm">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.blue }}>
+                    <div
+                      className="text-xs uppercase tracking-wide"
+                      style={{ color: BRAND.blue }}
+                    >
                       Student Query
                     </div>
-                    <div className="font-semibold text-lg">{selected.subject || "(no subject)"}</div>
+                    <div className="font-semibold text-lg">
+                      {selected.subject || "(no subject)"}
+                    </div>
                     <div className="text-xs text-slate-500 mt-1">{selected.from}</div>
-                  </div>
-                  <div className="text-sm">
-                    {selected.status === "replied" && (
-                      <span className="px-2 py-1 rounded-full text-xs bg-green-50 text-green-700">
-                        Replied
-                      </span>
-                    )}
-                    {selected.status === "escalated" && (
-                      <span className="px-2 py-1 rounded-full text-xs bg-red-50 text-red-700">
-                        Escalated
-                      </span>
-                    )}
-                    {selected.status === "new" && (
-                      <span className="px-2 py-1 rounded-full text-xs bg-slate-50 text-slate-600">
-                        New
-                      </span>
+                    {selected.date && (
+                      <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
+                        <Clock className="w-3 h-3" />{" "}
+                        {new Date(selected.date).toLocaleString()}
+                      </div>
                     )}
                   </div>
                 </div>
@@ -274,27 +321,42 @@ export default function StrathyInbox() {
 
               {/* AI Reply */}
               {selected.ai_reply ? (
-                <div className="rounded-xl border p-4 bg-slate-50">
-                  <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.red }}>
+                <div className="rounded-xl border p-4 bg-slate-50 mt-4">
+                  <div
+                    className="text-xs uppercase tracking-wide"
+                    style={{ color: BRAND.red }}
+                  >
                     Strathy AI Response
                   </div>
+                  {selected.ai_replied_at && (
+                    <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
+                      <Clock className="w-3 h-3" />{" "}
+                      {new Date(selected.ai_replied_at).toLocaleString()}
+                    </div>
+                  )}
                   <div className="mt-2 text-sm text-slate-800 whitespace-pre-wrap">
                     {selected.ai_reply}
                   </div>
                 </div>
               ) : (
-                <div className="rounded-xl border p-4 bg-white/30 text-slate-500">
-                  <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.red }}>
+                <div className="rounded-xl border p-4 bg-white/30 text-slate-500 mt-4">
+                  <div
+                    className="text-xs uppercase tracking-wide"
+                    style={{ color: BRAND.red }}
+                  >
                     Strathy AI Response
                   </div>
                   <div className="mt-2 text-sm">No automated response yet.</div>
                 </div>
               )}
 
-              {/* Admin reply */}
+              {/* Admin Reply */}
               {selected.status !== "escalated" ? (
-                <div className="mt-auto rounded-xl border p-4 bg-white">
-                  <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BRAND.blue }}>
+                <div className="mt-6 rounded-xl border p-4 bg-white">
+                  <div
+                    className="text-xs uppercase tracking-wide mb-2"
+                    style={{ color: BRAND.blue }}
+                  >
                     Your reply
                   </div>
                   <textarea
@@ -310,7 +372,11 @@ export default function StrathyInbox() {
                       className="px-4 py-2 rounded-xl text-white shadow-sm disabled:opacity-60 flex items-center gap-2"
                       style={{ background: BRAND.red }}
                     >
-                      {sending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Send className="w-4 h-4" />}
+                      {sending ? (
+                        <Loader2 className="w-4 h-4 animate-spin" />
+                      ) : (
+                        <Send className="w-4 h-4" />
+                      )}
                       {sending ? " Sending…" : " Send reply"}
                     </button>
 
@@ -322,14 +388,17 @@ export default function StrathyInbox() {
                     </button>
 
                     {sent && (
-                      <span className="inline-flex items-center gap-1 text-sm" style={{ color: BRAND.blue }}>
+                      <span
+                        className="inline-flex items-center gap-1 text-sm"
+                        style={{ color: BRAND.blue }}
+                      >
                         <CheckCircle2 className="w-4 h-4" /> Reply sent
                       </span>
                     )}
                   </div>
                 </div>
               ) : (
-                <div className="mt-auto rounded-xl border p-4 bg-white/50 text-red-600">
+                <div className="mt-6 rounded-xl border p-4 bg-white/50 text-red-600">
                   This message has been escalated — please follow up manually.
                 </div>
               )}
@@ -337,13 +406,6 @@ export default function StrathyInbox() {
           )}
         </section>
       </main>
-
-      {/* FOOTER */}
-      <footer className="max-w-7xl mx-auto px-6 py-4 text-xs text-slate-500">
-        <span>Made for Strathmore University</span>
-        <span className="mx-2">•</span>
-        <span>Theme: Red / Blue / Gold</span>
-      </footer>
     </div>
   );
 }

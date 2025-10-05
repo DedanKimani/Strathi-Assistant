@@ -91,6 +91,8 @@ def _extract_email(from_header: Optional[str]) -> Optional[str]:
 # MAIN FLOWS
 # ---------------------------
 
+from datetime import datetime, timezone
+
 def process_incoming_email(service, message: Dict) -> Optional[Dict]:
     """
     Process a single incoming student query and immediately generate an AI reply.
@@ -115,6 +117,13 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
         body = parsed.get("body") or ""
         thread_id = parsed.get("thread_id")
 
+        # 🕒 Extract received time from Gmail
+        internal_date = full.get("internalDate")
+        received_at = (
+            datetime.fromtimestamp(int(internal_date) / 1000, tz=timezone.utc).isoformat()
+            if internal_date else None
+        )
+
         # Mark as read
         try:
             service.users().messages().modify(
@@ -123,7 +132,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
         except HttpError as e:
             logger.warning("Failed to clear UNREAD for %s: %s", msg_id, e)
 
-        # === NEW: generate AI reply here ===
+        # === Generate AI reply ===
         ai_reply_result = generate_and_send_ai_reply(service, {
             "from": sender_header,
             "subject": subject,
@@ -139,7 +148,9 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             "body": body,
             "role": "student",
             "status": "processed",
+            "received_at": received_at,  # 🕒 added timestamp
             "ai_reply": ai_reply_result.get("ai_reply") if ai_reply_result else None,
+            "ai_replied_at": ai_reply_result.get("sent_at") if ai_reply_result else None,  # 🕒 reply time
             "ai_role": "strathy" if ai_reply_result else None,
         }
 
@@ -189,19 +200,24 @@ def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
         )
         sent = send_mime(service, raw_mime, thread_id=thread_id)
 
+        # 🕒 Record sent timestamp
+        sent_at = datetime.now(timezone.utc).isoformat()
+
         return {
             "threadId": thread_id,
             "to": sender_email,
-            "from": "strathy@strathmore.edu",   # Strathy’s identity
+            "from": "strathy@strathmore.edu",
             "subject": reply_subject,
             "ai_reply": ai_reply_text,
             "sent_id": sent.get("id") if sent else None,
+            "sent_at": sent_at,  # 🕒 added
             "role": "strathy"
         }
 
     except Exception as exc:
         logger.exception("generate_and_send_ai_reply failed: %s", exc)
         return None
+
 
 
 def get_ai_reply_for_thread(service, thread_id: str) -> Optional[str]:

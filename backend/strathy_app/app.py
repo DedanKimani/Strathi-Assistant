@@ -119,7 +119,7 @@ def gmail_unread():
     if not service:
         return JSONResponse({"ok": False, "message": "Failed to connect to Gmail"}, status_code=500)
 
-    msgs = list_unread_messages(service, max_results=5)
+    msgs = list_unread_messages(service, max_results=100)
     previews = []
 
     for m in msgs:
@@ -138,7 +138,9 @@ def gmail_unread():
             "subject": parsed.get("subject"),
             "student_query": parsed.get("body") or "",
             "ai_reply": ai_reply,
-            "role": "student"
+            "role": "student",
+            "date": parsed.get("date"),
+            "relative_time": parsed.get("relative_time") or "unknown time"
         })
 
     return JSONResponse(previews)
@@ -163,8 +165,11 @@ def gmail_last_reply():
             "subject": result["subject"],
             "student_query": result.get("original_body", ""),
             "ai_reply": result.get("ai_reply", ""),
-            "role": result["role"]
+            "role": result["role"],
+            "date": result.get("date"),
+            "relative_time": result.get("relative_time") or "unknown time"
         }
+
     return {"ok": False, "message": "No AI reply generated"}
 
 # ===== Manual reply =====
