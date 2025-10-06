@@ -12,6 +12,7 @@ import {
   Clock,
   ChevronLeft,
   ChevronRight,
+  XCircle,
 } from "lucide-react";
 
 const BRAND = {
@@ -40,16 +41,15 @@ export default function StrathyInbox() {
     setLoading(true);
     setSent(false);
     try {
-      const res = await fetch("/gmail/unread");
+      const res = await fetch("http://localhost:8000/gmail/unread");
       if (!res.ok) {
         if (res.status === 307 || res.redirected) {
-          window.location.href = "/oauth2/login";
+          window.location.href = "http://localhost:8000/oauth2/login";
           return;
         }
         throw new Error(`Failed to load messages (${res.status})`);
       }
       const data = await res.json();
-
       const normalized = (Array.isArray(data) ? data : []).map((m) => ({
         ...m,
         role: "student",
@@ -61,7 +61,7 @@ export default function StrathyInbox() {
       else setSelected(null);
       setCurrentPage(1);
     } catch (e) {
-      setError(e.message || "Something went wrong");
+      setError(e.message || "Something went wrong while fetching emails");
     } finally {
       setLoading(false);
     }
@@ -71,11 +71,11 @@ export default function StrathyInbox() {
     fetchUnread();
   }, []);
 
-  // Polling for new AI replies
+  // Polling for new AI replies every 20s
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
-        const res = await fetch("/gmail/last-reply");
+        const res = await fetch("http://localhost:8000/gmail/last-reply");
         if (!res.ok) return;
         const data = await res.json();
         if (data.ok && data.ai_reply && data.subject) {
@@ -129,12 +129,17 @@ export default function StrathyInbox() {
     setSending(true);
     setSent(false);
     try {
-      const res = await fetch("/gmail/reply", {
+      const res = await fetch("http://localhost:8000/gmail/reply", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message_id: selected.id, body_text: reply }),
       });
-      if (!res.ok) throw new Error(`Send failed (${res.status})`);
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.detail || `Send failed (${res.status})`);
+      }
+
       setSent(true);
       setReply("");
       setMessages((prev) =>
@@ -177,7 +182,7 @@ export default function StrathyInbox() {
           <h1 className="text-xl font-semibold">
             Strathmore SCES Communication Inbox
           </h1>
-          <div className="ml-auto">
+          <div className="ml-auto flex gap-3">
             <button
               onClick={fetchUnread}
               className="px-3 py-2 rounded-lg bg-white/15 hover:bg-white/25 transition text-sm flex items-center gap-2"
@@ -205,6 +210,12 @@ export default function StrathyInbox() {
             />
           </div>
 
+          {error && (
+            <div className="p-3 bg-red-50 border-b text-red-700 text-sm flex items-center gap-2">
+              <XCircle className="w-4 h-4" /> {error}
+            </div>
+          )}
+
           <div className="flex-1 overflow-y-auto">
             {loading && (
               <div className="p-6 text-center text-slate-500 flex items-center justify-center gap-2">
@@ -214,7 +225,7 @@ export default function StrathyInbox() {
             {!loading && paginated.length === 0 && (
               <div className="p-6 text-center text-slate-500">
                 <Inbox className="w-6 h-6 mx-auto mb-2 opacity-60" />
-                No queries
+                No queries found
               </div>
             )}
             {!loading &&
@@ -239,7 +250,7 @@ export default function StrathyInbox() {
                       </div>
                     </div>
                     <div className="ml-3 text-right">
-                      <div className="text-xs text-slate-400">
+                      <div className="text-xs text-slate-400 truncate">
                         {m.from ? m.from.split("<")[0].trim() : ""}
                       </div>
                       <div className="mt-1">
