@@ -1,4 +1,3 @@
-# backend/strathy_app/app.py
 import os
 os.environ['OAUTHLIB_INSECURE_TRANSPORT'] = '1'
 
@@ -6,7 +5,7 @@ from pathlib import Path
 from typing import Optional
 import logging
 
-from fastapi import FastAPI, Request, HTTPException, Body
+from fastapi import FastAPI, Request, Body
 from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
@@ -18,7 +17,6 @@ from google_auth_oauthlib.flow import Flow
 from apscheduler.schedulers.background import BackgroundScheduler
 
 from .config import SCOPES, CREDENTIALS_FILE, TOKEN_FILE
-
 from .services.gmail_service import (
     build_gmail_service,
     list_unread_messages,
@@ -29,6 +27,7 @@ from .services.gmail_service import (
 )
 from .utils.email_parser import parse_message
 from .utils.mime_helpers import build_reply_mime
+
 
 # ====== Setup ======
 load_dotenv()
@@ -51,9 +50,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+
 # ====== Token Management ======
 def _save_creds(creds: Credentials):
     Path(TOKEN_FILE).write_text(creds.to_json(), encoding="utf-8")
+
 
 def _load_creds() -> Optional[Credentials]:
     if not Path(TOKEN_FILE).exists():
@@ -63,10 +64,12 @@ def _load_creds() -> Optional[Credentials]:
     except Exception:
         return None
 
+
 # ====== Routes ======
 @app.get("/")
 def index():
     return {"ok": True, "message": "Strathy OAuth demo. Visit /oauth2/login to begin."}
+
 
 # ===== OAuth: Login → Google consent =====
 @app.get("/oauth2/login")
@@ -85,13 +88,18 @@ def auth_login(request: Request):
     request.session["oauth_state"] = state
     return RedirectResponse(authorization_url)
 
+
 # ===== OAuth Callback =====
 @app.get("/oauth2callback")
 def auth_callback(request: Request):
     expected_state = request.session.get("oauth_state")
     returned_state = request.query_params.get("state")
+
     if not expected_state or expected_state != returned_state:
-        raise HTTPException(status_code=400, detail="State mismatch. Please retry login.")
+        return JSONResponse(
+            status_code=400,
+            content={"ok": False, "error": "State mismatch. Please retry login."},
+        )
 
     redirect_uri = f"{BASE_URL}/oauth2callback"
     flow = Flow.from_client_secrets_file(
@@ -107,6 +115,7 @@ def auth_callback(request: Request):
     _save_creds(creds)
     request.session.pop("oauth_state", None)
     return RedirectResponse(url="/gmail/unread")
+
 
 # ===== List unread messages =====
 @app.get("/gmail/unread")
@@ -145,6 +154,7 @@ def gmail_unread():
 
     return JSONResponse(previews)
 
+
 # ===== Fetch latest AI reply =====
 @app.get("/gmail/last-reply")
 def gmail_last_reply():
@@ -172,6 +182,7 @@ def gmail_last_reply():
 
     return {"ok": False, "message": "No AI reply generated"}
 
+
 # ===== Manual reply =====
 @app.post("/gmail/reply")
 def gmail_reply(
@@ -180,16 +191,48 @@ def gmail_reply(
 ):
     creds = _load_creds()
     if not creds:
-        return JSONResponse({"ok": False, "message": "Not logged in"}, status_code=401)
+        return JSONResponse({"ok": False, "error": "Not logged in"}, status_code=401)
 
     service = build_gmail_service(creds)
     original = get_message(service, message_id)
     if not original:
-        raise HTTPException(status_code=404, detail="Original message not found")
+        return JSONResponse({"ok": False, "error": "Original message not found"}, status_code=404)
 
     parsed = parse_message(original)
     thread_id = parsed["thread_id"]
-    to_email = (parsed.get("sender") or "").split("<")[-1].strip(">")
+    to_email = (parsed.get("sender") or "").split("<")[-1].strip(">").lower()
+
+    # ===== 🚫 Blocked and Allowed Rules =====
+    BLOCKED_EMAILS = {
+        "strathmorecommunication@gmail.com",
+        "allstudents@strathmore.edu",
+        "allstaff@strathmore.edu",
+        "ictservices@strathmore.edu",
+        "tndumah@strathmore.edu",
+        "gnyaloti@strathmore.edu",
+        "bmonda@strathmore.edu",
+        "danson.mulinge@strathmore.edu",
+        "dmulinge@strathmore.edu",
+        "rkidewa@strathmore.edu",
+        "rkithuka@strathmore.edu",
+        "hmuchiri@strathmore.edu",
+    }
+
+    # Block specific addresses
+    if to_email in BLOCKED_EMAILS:
+        return JSONResponse(
+            status_code=403,
+            content={"ok": False, "error": f"Sending to {to_email} is not allowed."},
+        )
+
+    # Block all emails not from @strathmore.edu
+    if not to_email.endswith("@strathmore.edu"):
+        return JSONResponse(
+            status_code=403,
+            content={"ok": False, "error": f"Emails can only be sent to @strathmore.edu addresses (attempted: {to_email})."},
+        )
+
+    # ===== ✅ Continue sending =====
     subject = parsed.get("subject") or "(no subject)"
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
@@ -204,6 +247,7 @@ def gmail_reply(
 
     sent = send_mime(service, raw_mime, thread_id=thread_id)
     return JSONResponse({"ok": True, "sent_id": sent.get("id"), "threadId": sent.get("threadId")})
+
 
 # ===== Auto Reply Job =====
 def auto_reply_job():
