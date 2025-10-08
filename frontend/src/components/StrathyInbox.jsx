@@ -23,6 +23,13 @@ const BRAND = {
   soft: "#F8FAFC",
 };
 
+// ✅ Add the same blocked rules here (so frontend can display Blocked)
+const BLOCKED_EMAILS = [
+  "strathmorecommunication@gmail.com",
+  "allstudents@strathmore.edu",
+  "allstaff@strathmore.edu",
+];
+
 export default function StrathyInbox() {
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState([]);
@@ -50,11 +57,18 @@ export default function StrathyInbox() {
         throw new Error(`Failed to load messages (${res.status})`);
       }
       const data = await res.json();
-      const normalized = (Array.isArray(data) ? data : []).map((m) => ({
-        ...m,
-        role: "student",
-        status: m.ai_reply ? "replied" : "new",
-      }));
+
+      const normalized = (Array.isArray(data) ? data : []).map((m) => {
+        const fromEmail = (m.from || "").split("<").pop()?.replace(">", "").toLowerCase();
+        const isBlocked =
+          BLOCKED_EMAILS.includes(fromEmail) || !fromEmail.endsWith("@strathmore.edu");
+
+        return {
+          ...m,
+          role: "student",
+          status: isBlocked ? "blocked" : m.ai_reply ? "replied" : "new",
+        };
+      });
 
       setMessages(normalized);
       if (normalized.length > 0) setSelected(normalized[0]);
@@ -71,7 +85,7 @@ export default function StrathyInbox() {
     fetchUnread();
   }, []);
 
-  // Polling for new AI replies every 20s
+  // Poll for new AI replies every 20s
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -179,9 +193,7 @@ export default function StrathyInbox() {
       >
         <div className="max-w-7xl mx-auto px-6 py-3.5 flex items-center gap-3">
           <Mail className="w-6 h-6" />
-          <h1 className="text-xl font-semibold">
-            Strathmore SCES Communication Inbox
-          </h1>
+          <h1 className="text-xl font-semibold">Strathmore SCES Communication Inbox</h1>
           <div className="ml-auto flex gap-3">
             <button
               onClick={fetchUnread}
@@ -263,6 +275,11 @@ export default function StrathyInbox() {
                         {m.status === "new" && (
                           <span className="text-xs text-slate-400">New</span>
                         )}
+                        {m.status === "blocked" && (
+                          <span className="text-xs text-red-500 font-semibold flex items-center gap-1">
+                            <XCircle className="w-3 h-3" /> Blocked
+                          </span>
+                        )}
                       </div>
                     </div>
                   </div>
@@ -270,7 +287,7 @@ export default function StrathyInbox() {
               ))}
           </div>
 
-          {/* Pagination Controls */}
+          {/* Pagination */}
           {totalPages > 1 && (
             <div className="p-3 border-t flex items-center justify-between bg-white sticky bottom-0">
               <button
@@ -306,10 +323,7 @@ export default function StrathyInbox() {
               <div className="rounded-xl border p-4 bg-white shadow-sm">
                 <div className="flex items-center justify-between">
                   <div>
-                    <div
-                      className="text-xs uppercase tracking-wide"
-                      style={{ color: BRAND.blue }}
-                    >
+                    <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.blue }}>
                       Student Query
                     </div>
                     <div className="font-semibold text-lg">
@@ -333,10 +347,7 @@ export default function StrathyInbox() {
               {/* AI Reply */}
               {selected.ai_reply ? (
                 <div className="rounded-xl border p-4 bg-slate-50 mt-4">
-                  <div
-                    className="text-xs uppercase tracking-wide"
-                    style={{ color: BRAND.red }}
-                  >
+                  <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.red }}>
                     Strathy AI Response
                   </div>
                   {selected.ai_replied_at && (
@@ -351,10 +362,7 @@ export default function StrathyInbox() {
                 </div>
               ) : (
                 <div className="rounded-xl border p-4 bg-white/30 text-slate-500 mt-4">
-                  <div
-                    className="text-xs uppercase tracking-wide"
-                    style={{ color: BRAND.red }}
-                  >
+                  <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.red }}>
                     Strathy AI Response
                   </div>
                   <div className="mt-2 text-sm">No automated response yet.</div>
@@ -362,7 +370,11 @@ export default function StrathyInbox() {
               )}
 
               {/* Admin Reply */}
-              {selected.status !== "escalated" ? (
+              {selected.status === "blocked" ? (
+                <div className="mt-6 rounded-xl border p-4 bg-red-50 text-red-600">
+                  ⚠️ This email is blocked — replies are disabled.
+                </div>
+              ) : selected.status !== "escalated" ? (
                 <div className="mt-6 rounded-xl border p-4 bg-white">
                   <div
                     className="text-xs uppercase tracking-wide mb-2"
@@ -399,10 +411,7 @@ export default function StrathyInbox() {
                     </button>
 
                     {sent && (
-                      <span
-                        className="inline-flex items-center gap-1 text-sm"
-                        style={{ color: BRAND.blue }}
-                      >
+                      <span className="inline-flex items-center gap-1 text-sm" style={{ color: BRAND.blue }}>
                         <CheckCircle2 className="w-4 h-4" /> Reply sent
                       </span>
                     )}
