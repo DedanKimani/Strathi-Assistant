@@ -115,6 +115,7 @@ def auth_callback(request: Request):
     return RedirectResponse(url="/gmail/unread")
 
 
+# ====== Main Inbox Route ======
 @app.get("/gmail/unread")
 def gmail_unread():
     creds = _load_creds()
@@ -131,21 +132,30 @@ def gmail_unread():
             continue
 
         parsed = parse_message(full)
-        thread_id = parsed["thread_id"]
+        thread_id = parsed.get("thread_id")
         sender = parsed.get("sender") or ""
         sender_email = sender.split("<")[-1].strip(">").lower()
         ai_reply = get_ai_reply_for_thread(service, thread_id)
 
+        # Determine sender permission
         allowed = is_sender_allowed(sender_email)
+
+        # Assign correct status
+        if not allowed:
+            status = "blocked"
+            ai_reply = None
+        else:
+            status = "replied" if ai_reply else "pending"
+
         previews.append({
             "id": parsed.get("message_id"),
             "threadId": thread_id,
             "from": sender,
             "subject": parsed.get("subject"),
             "student_query": parsed.get("body") or "",
-            "ai_reply": ai_reply if allowed else None,
+            "ai_reply": ai_reply,
             "role": "student",
-            "status": "blocked" if not allowed else ("replied" if ai_reply else "pending"),
+            "status": status,
             "date": parsed.get("date"),
             "relative_time": parsed.get("relative_time") or "unknown time"
         })

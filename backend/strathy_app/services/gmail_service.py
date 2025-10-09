@@ -134,10 +134,6 @@ def is_sender_allowed(email: str) -> bool:
 # Core Processing
 # ===========================
 def process_incoming_email(service, message: Dict) -> Optional[Dict]:
-    """
-    Process a single incoming email and generate an AI reply
-    unless sender is blocked or not allowed.
-    """
     try:
         msg_id = message.get("id")
         if not msg_id:
@@ -190,13 +186,19 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
                 "ai_role": None,
             }
 
-        # ✅ Generate and send AI reply
+        # ✅ Generate AI reply (but only mark as replied if actually sent)
         ai_reply_result = generate_and_send_ai_reply(service, {
             "from": sender_header,
             "subject": subject,
             "body": body,
             "threadId": thread_id
         })
+
+        if not ai_reply_result:
+            # No AI reply generated yet (model skipped or error)
+            status = "pending"
+        else:
+            status = ai_reply_result.get("status", "pending")
 
         return {
             "id": msg_id,
@@ -205,7 +207,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             "subject": subject,
             "body": body,
             "role": "student",
-            "status": ai_reply_result.get("status", "replied") if ai_reply_result else "no-reply",
+            "status": status,
             "received_at": received_at,
             "ai_reply": ai_reply_result.get("ai_reply") if ai_reply_result else None,
             "ai_replied_at": ai_reply_result.get("sent_at") if ai_reply_result else None,
@@ -218,9 +220,6 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
 
 
 def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
-    """
-    Generate an AI reply and send it (skips blocked or disallowed senders).
-    """
     try:
         sender_header = student_msg.get("from", "")
         sender_email = _extract_email(sender_header)
@@ -239,41 +238,42 @@ def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
             else sender_email.split("@")[0]
         )
 
-        # Generate AI reply text
         ai_reply_text = generate_ai_reply(
             sender_name=sender_name,
             sender_email=sender_email,
             subject=subject,
             body=body
         )
-        if not ai_reply_text:
-            return None
 
-        raw_mime = build_reply_mime(
+        if not ai_reply_text:
+            logger.warning("⚠️ AI did not generate a reply for %s", sender_email)
+            return {"status": "pending", "ai_reply": None, "sent_at": None}
+
+        # 📨 Actually send the reply email
+        sent = send_mime(service, build_reply_mime(
             to_email=sender_email,
             subject=reply_subject,
             body_text=ai_reply_text,
             in_reply_to=[],
             original_headers=[],
-        )
-        sent = send_mime(service, raw_mime, thread_id=thread_id)
+        ), thread_id=thread_id)
 
         sent_at = datetime.now(timezone.utc).isoformat()
         return {
-            "status": "replied",
+            "status": "replied" if sent else "pending",
             "threadId": thread_id,
             "to": sender_email,
             "from": "strathy@strathmore.edu",
             "subject": reply_subject,
             "ai_reply": ai_reply_text,
             "sent_id": sent.get("id") if sent else None,
-            "sent_at": sent_at,
+            "sent_at": sent_at if sent else None,
             "role": "strathy"
         }
 
     except Exception as exc:
         logger.exception("generate_and_send_ai_reply failed: %s", exc)
-        return None
+        return {"status": "pending", "ai_reply": None, "sent_at": None}
 
 
 def get_ai_reply_for_thread(service, thread_id: str) -> Optional[str]:

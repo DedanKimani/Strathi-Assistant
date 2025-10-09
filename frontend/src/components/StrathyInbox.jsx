@@ -13,6 +13,7 @@ import {
   ChevronLeft,
   ChevronRight,
   ShieldAlert,
+  Hourglass,
 } from "lucide-react";
 
 const BRAND = {
@@ -56,14 +57,15 @@ export default function StrathyInbox() {
         const senderEmail = m.from?.match(/<([^>]+)>/)?.[1]?.toLowerCase() || "";
         let status = m.status || "new";
 
-        // normalize backend statuses
-        if (status === "pending" && senderEmail.endsWith("@strathmore.edu")) {
+        // Normalize backend statuses
+        if (status === "blocked") {
+          status = "blocked";
+        } else if (status === "replied") {
+          status = "replied";
+        } else if (status === "pending") {
+          status = "pending";
+        } else {
           status = "new";
-        }
-
-        // Handle allowed external sender
-        if (senderEmail === "dedankimani007@gmail.com" && m.status === "blocked") {
-          status = m.ai_reply ? "replied" : "new";
         }
 
         return {
@@ -289,6 +291,11 @@ export default function StrathyInbox() {
                             <ShieldAlert className="w-3 h-3" /> Blocked
                           </span>
                         )}
+                        {m.status === "pending" && (
+                          <span className="text-xs text-blue-600 inline-flex items-center gap-1 w-[80px] justify-end">
+                            <Hourglass className="w-3 h-3" /> Pending
+                          </span>
+                        )}
                         {m.status === "escalated" && (
                           <span className="text-xs text-red-600 inline-flex items-center gap-1 w-[80px] justify-end">
                             <AlertTriangle className="w-3 h-3" /> Escalated
@@ -368,11 +375,16 @@ export default function StrathyInbox() {
                 </div>
               </div>
 
-              {/* AI Reply / Block Notice */}
+              {/* AI Reply or Notices */}
               {selected.status === "blocked" ? (
                 <div className="rounded-xl border p-4 mt-4 bg-orange-50 text-orange-700 flex items-center gap-2">
                   <ShieldAlert className="w-5 h-5" />
                   Auto-reply blocked by policy — no message sent.
+                </div>
+              ) : selected.status === "pending" ? (
+                <div className="rounded-xl border p-4 mt-4 bg-blue-50 text-blue-700 flex items-center gap-2">
+                  <Hourglass className="w-5 h-5" />
+                  Awaiting automated reply — please stand by.
                 </div>
               ) : selected.ai_reply ? (
                 <div className="rounded-xl border p-4 bg-slate-50 mt-4">
