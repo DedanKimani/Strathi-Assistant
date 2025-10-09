@@ -24,6 +24,7 @@ from .services.gmail_service import (
     send_mime,
     process_incoming_email,
     get_ai_reply_for_thread,
+    is_sender_allowed,
 )
 from .utils.email_parser import parse_message
 from .utils.mime_helpers import build_reply_mime
@@ -41,7 +42,7 @@ app = FastAPI()
 app.add_middleware(SessionMiddleware, secret_key=SECRET_KEY)
 
 # ====== CORS ======
-origins = ["http://localhost:3000"]  # React dev server
+origins = ["http://localhost:3000"]
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,
@@ -49,7 +50,6 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
-
 
 # ====== Token Management ======
 def _save_creds(creds: Credentials):
@@ -68,10 +68,9 @@ def _load_creds() -> Optional[Credentials]:
 # ====== Routes ======
 @app.get("/")
 def index():
-    return {"ok": True, "message": "Strathy OAuth demo. Visit /oauth2/login to begin."}
+    return {"ok": True, "message": "Strathy Gmail Automation API is running."}
 
 
-# ===== OAuth: Login → Google consent =====
 @app.get("/oauth2/login")
 def auth_login(request: Request):
     redirect_uri = f"{BASE_URL}/oauth2callback"
@@ -89,7 +88,6 @@ def auth_login(request: Request):
     return RedirectResponse(authorization_url)
 
 
-# ===== OAuth Callback =====
 @app.get("/oauth2callback")
 def auth_callback(request: Request):
     expected_state = request.session.get("oauth_state")
@@ -117,7 +115,6 @@ def auth_callback(request: Request):
     return RedirectResponse(url="/gmail/unread")
 
 
-# ===== List unread messages =====
 @app.get("/gmail/unread")
 def gmail_unread():
     creds = _load_creds()
@@ -125,9 +122,6 @@ def gmail_unread():
         return JSONResponse({"ok": False, "message": "Not logged in"}, status_code=401)
 
     service = build_gmail_service(creds)
-    if not service:
-        return JSONResponse({"ok": False, "message": "Failed to connect to Gmail"}, status_code=500)
-
     msgs = list_unread_messages(service, max_results=100)
     previews = []
 
@@ -138,16 +132,20 @@ def gmail_unread():
 
         parsed = parse_message(full)
         thread_id = parsed["thread_id"]
+        sender = parsed.get("sender") or ""
+        sender_email = sender.split("<")[-1].strip(">").lower()
         ai_reply = get_ai_reply_for_thread(service, thread_id)
 
+        allowed = is_sender_allowed(sender_email)
         previews.append({
             "id": parsed.get("message_id"),
             "threadId": thread_id,
-            "from": parsed.get("sender"),
+            "from": sender,
             "subject": parsed.get("subject"),
             "student_query": parsed.get("body") or "",
-            "ai_reply": ai_reply,
+            "ai_reply": ai_reply if allowed else None,
             "role": "student",
+            "status": "blocked" if not allowed else ("replied" if ai_reply else "pending"),
             "date": parsed.get("date"),
             "relative_time": parsed.get("relative_time") or "unknown time"
         })
@@ -155,7 +153,6 @@ def gmail_unread():
     return JSONResponse(previews)
 
 
-# ===== Fetch latest AI reply =====
 @app.get("/gmail/last-reply")
 def gmail_last_reply():
     creds = _load_creds()
@@ -165,7 +162,7 @@ def gmail_last_reply():
     service = build_gmail_service(creds)
     unread = list_unread_messages(service, max_results=1)
     if not unread:
-        return {"ok": False, "message": "No recent AI replies"}
+        return {"ok": False, "message": "No unread messages found"}
 
     msg = unread[0]
     result = process_incoming_email(service, msg)
@@ -173,22 +170,18 @@ def gmail_last_reply():
         return {
             "ok": True,
             "subject": result["subject"],
-            "student_query": result.get("original_body", ""),
+            "student_query": result.get("body", ""),
             "ai_reply": result.get("ai_reply", ""),
             "role": result["role"],
-            "date": result.get("date"),
-            "relative_time": result.get("relative_time") or "unknown time"
+            "status": result.get("status"),
+            "received_at": result.get("received_at"),
         }
 
     return {"ok": False, "message": "No AI reply generated"}
 
 
-# ===== Manual reply =====
 @app.post("/gmail/reply")
-def gmail_reply(
-    message_id: str = Body(..., embed=True),
-    body_text: str = Body(..., embed=True),
-):
+def gmail_reply(message_id: str = Body(..., embed=True), body_text: str = Body(..., embed=True)):
     creds = _load_creds()
     if not creds:
         return JSONResponse({"ok": False, "error": "Not logged in"}, status_code=401)
@@ -199,40 +192,14 @@ def gmail_reply(
         return JSONResponse({"ok": False, "error": "Original message not found"}, status_code=404)
 
     parsed = parse_message(original)
-    thread_id = parsed["thread_id"]
     to_email = (parsed.get("sender") or "").split("<")[-1].strip(">").lower()
 
-    # ===== 🚫 Blocked and Allowed Rules =====
-    BLOCKED_EMAILS = {
-        "strathmorecommunication@gmail.com",
-        "allstudents@strathmore.edu",
-        "allstaff@strathmore.edu",
-        "ictservices@strathmore.edu",
-        "tndumah@strathmore.edu",
-        "gnyaloti@strathmore.edu",
-        "bmonda@strathmore.edu",
-        "danson.mulinge@strathmore.edu",
-        "dmulinge@strathmore.edu",
-        "rkidewa@strathmore.edu",
-        "rkithuka@strathmore.edu",
-        "hmuchiri@strathmore.edu",
-    }
-
-    # Block specific addresses
-    if to_email in BLOCKED_EMAILS:
+    if not is_sender_allowed(to_email):
         return JSONResponse(
             status_code=403,
             content={"ok": False, "error": f"Sending to {to_email} is not allowed."},
         )
 
-    # Block all emails not from @strathmore.edu
-    if not to_email.endswith("@strathmore.edu"):
-        return JSONResponse(
-            status_code=403,
-            content={"ok": False, "error": f"Emails can only be sent to @strathmore.edu addresses (attempted: {to_email})."},
-        )
-
-    # ===== ✅ Continue sending =====
     subject = parsed.get("subject") or "(no subject)"
     if not subject.lower().startswith("re:"):
         subject = f"Re: {subject}"
@@ -245,8 +212,13 @@ def gmail_reply(
         original_headers=original.get("payload", {}).get("headers", []),
     )
 
-    sent = send_mime(service, raw_mime, thread_id=thread_id)
-    return JSONResponse({"ok": True, "sent_id": sent.get("id"), "threadId": sent.get("threadId")})
+    sent = send_mime(service, raw_mime, thread_id=parsed["thread_id"])
+    return JSONResponse({
+        "ok": True,
+        "sent_id": sent.get("id"),
+        "threadId": sent.get("threadId"),
+        "status": "replied"
+    })
 
 
 # ===== Auto Reply Job =====
@@ -264,8 +236,24 @@ def auto_reply_job():
             return
 
         first_msg = unread[0]
+        full = get_message(service, first_msg["id"])
+        parsed = parse_message(full)
+        sender = parsed.get("sender") or ""
+        sender_email = sender.split("<")[-1].strip(">").lower()
+
+        if not is_sender_allowed(sender_email):
+            logging.info(f"⛔ Skipping auto-reply for blocked/disallowed sender: {sender_email}")
+            return
+
         result = process_incoming_email(service, first_msg)
         if result:
-            logging.info(f"✅ Auto-replied to {result['to']} | Subject: {result['subject']}")
+            logging.info(f"✅ Auto-replied to {result.get('from')} | Subject: {result.get('subject')}")
+
     except Exception as e:
         logging.error(f"Auto-reply job failed: {e}")
+
+
+# ====== Scheduler ======
+scheduler = BackgroundScheduler()
+scheduler.add_job(auto_reply_job, "interval", minutes=3)
+scheduler.start()

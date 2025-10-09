@@ -50,30 +50,32 @@ export default function StrathyInbox() {
         }
         throw new Error(`Failed to load messages (${res.status})`);
       }
-      const data = await res.json();
 
-      // Normalize messages and detect blocked ones (non-strathmore)
+      const data = await res.json();
       const normalized = (Array.isArray(data) ? data : []).map((m) => {
-        const sender = (m.from || "").toLowerCase();
-        const isBlocked =
-          !sender.includes("@strathmore.edu") ||
-          sender.includes("allstudents@strathmore.edu") ||
-          sender.includes("allstaff@strathmore.edu");
+        const senderEmail = m.from?.match(/<([^>]+)>/)?.[1]?.toLowerCase() || "";
+        let status = m.status || "new";
+
+        // normalize backend statuses
+        if (status === "pending" && senderEmail.endsWith("@strathmore.edu")) {
+          status = "new";
+        }
+
+        // Handle allowed external sender
+        if (senderEmail === "dedankimani007@gmail.com" && m.status === "blocked") {
+          status = m.ai_reply ? "replied" : "new";
+        }
 
         return {
           ...m,
-          role: "student",
-          status: isBlocked
-            ? "blocked"
-            : m.status || (m.ai_reply ? "replied" : "new"),
+          status,
           body: m.student_query || m.body || "",
           received_at: m.date || m.received_at || new Date().toISOString(),
         };
       });
 
       setMessages(normalized);
-      if (normalized.length > 0) setSelected(normalized[0]);
-      else setSelected(null);
+      setSelected(normalized[0] || null);
       setCurrentPage(1);
     } catch (e) {
       setError(e.message || "Something went wrong");
@@ -86,7 +88,7 @@ export default function StrathyInbox() {
     fetchUnread();
   }, []);
 
-  // === Poll backend for updates (AI replies) ===
+  // === Poll backend for updates ===
   useEffect(() => {
     const interval = setInterval(async () => {
       try {
@@ -154,24 +156,19 @@ export default function StrathyInbox() {
       });
 
       const data = await res.json();
-
-      // Handle blocked (403) or rejected emails
       if (res.status === 403 || data.error?.includes("not allowed")) {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === selected.id ? { ...m, status: "blocked" } : m
           )
         );
-        setSelected((s) =>
-          s ? { ...s, status: "blocked" } : s
-        );
+        setSelected((s) => (s ? { ...s, status: "blocked" } : s));
         alert(data.error || "Message blocked by policy 🚫");
         return;
       }
 
       if (!res.ok || !data.ok) throw new Error(data.error || "Send failed");
 
-      // Successfully sent
       setSent(true);
       setReply("");
       setMessages((prev) =>
@@ -275,24 +272,32 @@ export default function StrathyInbox() {
                         {new Date(m.received_at || Date.now()).toLocaleString()}
                       </div>
                     </div>
-                    <div className="ml-3 text-right">
-                      <div className="text-xs text-slate-400 truncate max-w-[130px]">
+
+                    {/* Status display */}
+                    <div className="ml-3 text-right w-[110px] flex flex-col items-end">
+                      <div className="text-xs text-slate-400 truncate max-w-full text-right">
                         {m.from ? m.from.split("<")[0].trim() : ""}
                       </div>
-                      <div className="mt-1">
+                      <div className="mt-1 w-full flex justify-end">
                         {m.status === "replied" && (
-                          <span className="text-xs text-green-600">Replied</span>
+                          <span className="text-xs text-green-600 inline-flex items-center gap-1 w-[80px] justify-end">
+                            <CheckCircle2 className="w-3 h-3" /> Replied
+                          </span>
                         )}
                         {m.status === "blocked" && (
-                          <span className="text-xs text-orange-600 flex items-center gap-1">
+                          <span className="text-xs text-orange-600 inline-flex items-center gap-1 w-[80px] justify-end">
                             <ShieldAlert className="w-3 h-3" /> Blocked
                           </span>
                         )}
                         {m.status === "escalated" && (
-                          <span className="text-xs text-red-600">Escalated</span>
+                          <span className="text-xs text-red-600 inline-flex items-center gap-1 w-[80px] justify-end">
+                            <AlertTriangle className="w-3 h-3" /> Escalated
+                          </span>
                         )}
-                        {m.status === "new" && (
-                          <span className="text-xs text-slate-400">New</span>
+                        {(!m.status || m.status === "new") && (
+                          <span className="text-xs text-slate-500 inline-flex items-center gap-1 w-[80px] justify-end">
+                            <Clock className="w-3 h-3" /> New
+                          </span>
                         )}
                       </div>
                     </div>
@@ -346,7 +351,9 @@ export default function StrathyInbox() {
                     <div className="font-semibold text-lg">
                       {selected.subject || "(no subject)"}
                     </div>
-                    <div className="text-xs text-slate-500 mt-1">{selected.from}</div>
+                    <div className="text-xs text-slate-500 mt-1">
+                      {selected.from}
+                    </div>
                     {selected.received_at && (
                       <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
                         <Clock className="w-3 h-3" />{" "}

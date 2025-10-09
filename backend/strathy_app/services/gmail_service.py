@@ -4,7 +4,6 @@ import logging
 import re
 from typing import List, Dict, Optional
 from datetime import datetime, timezone
-from email.mime.text import MIMEText
 
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
@@ -17,6 +16,7 @@ from ..utils.email_parser import parse_message
 from ..utils.mime_helpers import build_reply_mime
 
 logger = logging.getLogger(__name__)
+
 
 # ========================
 # Gmail Connection Helpers
@@ -69,7 +69,7 @@ def send_mime(service, raw_mime, thread_id: Optional[str] = None) -> Optional[Di
             body["threadId"] = thread_id
 
         sent = service.users().messages().send(userId="me", body=body).execute()
-        logger.info("Sent message id=%s threadId=%s", sent.get("id"), sent.get("threadId"))
+        logger.info("✅ Sent message id=%s threadId=%s", sent.get("id"), sent.get("threadId"))
         return sent
     except HttpError as e:
         logger.error("Gmail send failed: %s", e)
@@ -95,6 +95,8 @@ def _extract_email(from_header: Optional[str]) -> Optional[str]:
 # ===========================
 # Email Processing / AI Reply
 # ===========================
+
+# 🚫 Blocklist (do not reply)
 BLOCKED_EMAILS = {
     "strathmorecommunication@gmail.com",
     "allstudents@strathmore.edu",
@@ -110,11 +112,31 @@ BLOCKED_EMAILS = {
     "hmuchiri@strathmore.edu",
 }
 
+# ✅ Whitelist (trusted external senders)
+ALLOWED_EXTERNAL_SENDERS = {
+    "dedankimani007@gmail.com",
+}
 
+
+def is_sender_allowed(email: str) -> bool:
+    """Check if a sender is allowed to receive an AI reply."""
+    email = (email or "").lower().strip()
+    if email in BLOCKED_EMAILS:
+        return False
+    if email.endswith("@strathmore.edu"):
+        return True
+    if email in ALLOWED_EXTERNAL_SENDERS:
+        return True
+    return False
+
+
+# ===========================
+# Core Processing
+# ===========================
 def process_incoming_email(service, message: Dict) -> Optional[Dict]:
     """
     Process a single incoming email and generate an AI reply
-    unless sender is blocked or not from @strathmore.edu.
+    unless sender is blocked or not allowed.
     """
     try:
         msg_id = message.get("id")
@@ -131,35 +153,17 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
         if not sender_email:
             return None
 
-        # 🚫 Block all non-Strathmore addresses immediately
-        if not sender_email.endswith("@strathmore.edu"):
-            logger.info("🚫 Skipping non-Strathmore email: %s", sender_email)
-            return {
-                "id": msg_id,
-                "threadId": parsed.get("thread_id"),
-                "from": sender_header,
-                "subject": parsed.get("subject") or "(no subject)",
-                "body": parsed.get("body") or "",
-                "role": "student",
-                "status": "blocked",
-                "reason": "External domain not allowed",
-                "ai_reply": None,
-                "ai_replied_at": None,
-                "ai_role": None,
-            }
-
         subject = parsed.get("subject") or "(no subject)"
         body = parsed.get("body") or ""
         thread_id = parsed.get("thread_id")
 
-        # 🕒 Extract received time
         internal_date = full.get("internalDate")
         received_at = (
             datetime.fromtimestamp(int(internal_date) / 1000, tz=timezone.utc).isoformat()
             if internal_date else None
         )
 
-        # Mark as read
+        # Mark message as read
         try:
             service.users().messages().modify(
                 userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
@@ -167,9 +171,10 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
         except HttpError as e:
             logger.warning("Failed to clear UNREAD for %s: %s", msg_id, e)
 
-        # 🚫 Blocked addresses check
-        if sender_email in BLOCKED_EMAILS:
-            logger.info("🚫 Skipping blocked sender: %s", sender_email)
+        # 🚫 Skip disallowed senders
+        if not is_sender_allowed(sender_email):
+            reason = "Blocked sender" if sender_email in BLOCKED_EMAILS else "External domain not allowed"
+            logger.info(f"⛔ Skipping AI reply to {sender_email} ({reason})")
             return {
                 "id": msg_id,
                 "threadId": thread_id,
@@ -178,7 +183,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
                 "body": body,
                 "role": "student",
                 "status": "blocked",
-                "reason": "Blocked sender",
+                "reason": reason,
                 "received_at": received_at,
                 "ai_reply": None,
                 "ai_replied_at": None,
@@ -214,17 +219,13 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
 
 def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
     """
-    Generate an AI reply and send it (skips blocked or non-Strathmore senders).
+    Generate an AI reply and send it (skips blocked or disallowed senders).
     """
     try:
         sender_header = student_msg.get("from", "")
         sender_email = _extract_email(sender_header)
-        if not sender_email:
-            return None
-
-        # 🚫 Prevent replies to blocked or external senders
-        if sender_email in BLOCKED_EMAILS or not sender_email.endswith("@strathmore.edu"):
-            logger.info(f"🚫 Not sending AI reply to {sender_email} (blocked/external)")
+        if not sender_email or not is_sender_allowed(sender_email):
+            logger.info(f"⛔ Not sending AI reply to disallowed sender: {sender_email}")
             return {"status": "blocked", "ai_reply": None, "sent_at": None}
 
         subject = student_msg.get("subject", "(no subject)")
@@ -238,7 +239,7 @@ def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
             else sender_email.split("@")[0]
         )
 
-        # Generate AI text
+        # Generate AI reply text
         ai_reply_text = generate_ai_reply(
             sender_name=sender_name,
             sender_email=sender_email,
@@ -248,7 +249,6 @@ def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
         if not ai_reply_text:
             return None
 
-        # Build MIME + send
         raw_mime = build_reply_mime(
             to_email=sender_email,
             subject=reply_subject,
@@ -277,9 +277,7 @@ def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
 
 
 def get_ai_reply_for_thread(service, thread_id: str) -> Optional[str]:
-    """
-    Fetch the latest AI reply for a given thread (if Strathy already responded).
-    """
+    """Fetch the latest AI reply in a Gmail thread."""
     try:
         thread = service.users().threads().get(userId="me", id=thread_id, format="full").execute()
         messages = thread.get("messages", [])
