@@ -24,6 +24,80 @@ const BRAND = {
   soft: "#F8FAFC",
 };
 
+function parseEmailAddress(fromHeader = "") {
+  // returns lower-case email (if any) and display name
+  if (!fromHeader) return { email: "", name: "" };
+  const m = fromHeader.match(/<([^>]+)>/);
+  const email = (m && m[1]) || fromHeader;
+  const namePart = fromHeader.split("<")[0].trim().replace(/(^"|"$)/g, "");
+  return { email: (email || "").toLowerCase().trim(), name: namePart || "" };
+}
+
+function prettyNameFromEmail(email) {
+  if (!email) return "";
+  const local = email.split("@")[0];
+  // replace dots/underscores/hyphens, split, capitalize
+  const tokens = local.replace(/[._\-]/g, " ").split(/\s+/).filter(Boolean);
+  return tokens
+    .map((t) => t.charAt(0).toUpperCase() + t.slice(1))
+    .join(" ");
+}
+
+function extractAdmissionAndGroup(body = "") {
+  // Heuristic: look for admission numbers or reg numbers like:
+  // "Admission: S12345", "Admission No: 20210001", "Reg No: 12345"
+  // Course-year-group patterns examples: "BBIT 4.2 B", "BScCS 3.1 A", "BBIT 4.2"
+  const text = (body || "").replace(/\r/g, " ");
+  let admission = null;
+  let courseGroup = null;
+
+  // common admission patterns
+  const admissionPatterns = [
+    /admission(?:\s*no| number|#|:)?\s*[:#]?\s*([A-Za-z0-9\-]+)/i,
+    /admn(?:\.)?\s*[:#]?\s*([A-Za-z0-9\-]+)/i,
+    /reg(?:istration)?(?:\s*no| number|#|:)?\s*[:#]?\s*([A-Za-z0-9\-]+)/i,
+    /student\s*no(?:\s*[:#])?\s*([A-Za-z0-9\-]+)/i,
+  ];
+  for (const re of admissionPatterns) {
+    const m = text.match(re);
+    if (m && m[1]) {
+      admission = m[1].trim();
+      break;
+    }
+  }
+
+  // course / year / group patterns
+  // e.g. "BBIT 4.2 B", "BSc CS 3.1 A", "BBIT Year 4 Group B", "Course: BBIT 4.2 B"
+  const coursePatterns = [
+    /([A-Z]{2,6}\s*[A-Z0-9]{0,4})\s+([1-4](?:\.[0-9])?)(?:\s*[-\/]?\s*([A-Z]))/i, // BBIT 4.2 B
+    /course\s*[:\-]?\s*([A-Za-z0-9\s\.]{2,30})\s*(year\s*)?([1-4](?:\.[0-9])?)\s*(group\s*)?([A-Za-z0-9]+)/i,
+    /([A-Z]{2,6}\s*[A-Z0-9]{0,4})\s+(year)?\s*([1-4](?:\.[0-9])?)/i,
+    /([A-Za-z]{2,10}\s*[A-Za-z0-9]{0,6})\s*-\s*([1-4](?:\.[0-9])?)/i,
+  ];
+
+  for (const re of coursePatterns) {
+    const m = text.match(re);
+    if (m) {
+      // try to assemble a sensible course-group string from captures
+      // prefer bigger matches
+      const groups = m.slice(1).filter(Boolean).map(s => String(s).trim());
+      courseGroup = groups.join(" ").replace(/\s+/g, " ").trim();
+      if (courseGroup) break;
+    }
+  }
+
+  // Fallback: look for "group: A" "year: 4"
+  if (!courseGroup) {
+    const g = text.match(/group(?:\s*[:#])?\s*([A-Za-z0-9]+)/i);
+    const y = text.match(/year(?:\s*[:#])?\s*([1-4](?:\.[0-9])?)/i);
+    if (g || y) {
+      courseGroup = `${y ? y[1] : ""} ${g ? g[1] : ""}`.trim();
+    }
+  }
+
+  return { admission: admission || "", courseGroup: courseGroup || "" };
+}
+
 export default function StrathyInbox() {
   const [loading, setLoading] = useState(false);
   const [messages, setMessages] = useState([]);
@@ -53,26 +127,45 @@ export default function StrathyInbox() {
       }
 
       const data = await res.json();
-      const normalized = (Array.isArray(data) ? data : []).map((m) => {
-        const senderEmail = m.from?.match(/<([^>]+)>/)?.[1]?.toLowerCase() || "";
-        let status = m.status || "new";
 
-        // Normalize backend statuses
-        if (status === "blocked") {
-          status = "blocked";
-        } else if (status === "replied") {
-          status = "replied";
-        } else if (status === "pending") {
-          status = "pending";
-        } else {
-          status = "new";
+      const normalized = (Array.isArray(data) ? data : []).map((m) => {
+        // parse sender header into email & name
+        const sender = m.from || m.sender || "";
+        const { email: student_email, name: fromName } = parseEmailAddress(sender);
+        const student_name =
+          m.student_name ||
+          m.name ||
+          prettyNameFromEmail(student_email) ||
+          fromName ||
+          "";
+
+        const body = m.student_query || m.body || m.body_text || "";
+
+        // try to extract admission and course-group from body (best-effort)
+        const parsed = extractAdmissionAndGroup(body);
+
+        // normalize statuses
+        let status = (m.status || "").toLowerCase();
+        if (!status) status = m.ai_reply ? "replied" : "new";
+        if (status !== "blocked" && status !== "replied" && status !== "escalated" && status !== "pending") {
+          // preserve backend blocked if present; otherwise keep new/replied heuristics
+          status = status === "new" ? "new" : status;
         }
 
         return {
-          ...m,
+          id: m.id || m.message_id || m.threadId,
+          threadId: m.threadId || m.threadId,
+          from: sender,
+          student_email,
+          student_name,
+          admission_number: m.admission_number || parsed.admission || "",
+          course_group: m.course_group || parsed.courseGroup || "",
+          subject: m.subject || "(no subject)",
+          body,
+          ai_reply: m.ai_reply || null,
           status,
-          body: m.student_query || m.body || "",
-          received_at: m.date || m.received_at || new Date().toISOString(),
+          received_at: m.received_at || m.date || new Date().toISOString(),
+          raw: m, // keep original if needed
         };
       });
 
@@ -88,6 +181,7 @@ export default function StrathyInbox() {
 
   useEffect(() => {
     fetchUnread();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // === Poll backend for updates ===
@@ -133,7 +227,7 @@ export default function StrathyInbox() {
     const q = filter.trim().toLowerCase();
     if (!q) return messages;
     return messages.filter((m) =>
-      [m.subject, m.from, m.body].filter(Boolean).some((t) =>
+      [m.subject, m.student_name, m.student_email, m.body].filter(Boolean).some((t) =>
         String(t).toLowerCase().includes(q)
       )
     );
@@ -143,10 +237,73 @@ export default function StrathyInbox() {
   const startIndex = (currentPage - 1) * pageSize;
   const paginated = filtered.slice(startIndex, startIndex + pageSize);
 
+  // === Ask for missing details (sends templated message) ===
+  const askForDetails = async (msg) => {
+    if (!msg) return;
+    // If student_email is missing or looks invalid, disable
+    const to = msg.student_email;
+    if (!to || !to.includes("@")) {
+      alert("Can't ask for details because recipient email is not available.");
+      return;
+    }
+
+    const bodyText = `Hello ${msg.student_name || "Student"},\n\nWe need a couple of quick details to help you faster:\n\n1) Admission number (e.g. S12345 or 20210001)\n2) Course-year-group (e.g. BBIT 4.2 B)\n\nPlease reply with those details and we'll help you right away.\n\nThanks,\nStrathy Support Team`;
+
+    try {
+      // mark pending locally
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, status: "pending" } : m))
+      );
+      setSelected((s) => (s && s.id === msg.id ? { ...s, status: "pending" } : s));
+
+      const res = await fetch("/gmail/reply", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message_id: msg.id, body_text: bodyText }),
+      });
+
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok || data.error) {
+        // Revert status if failed
+        setMessages((prev) =>
+          prev.map((m) => (m.id === msg.id ? { ...m, status: "new" } : m))
+        );
+        setSelected((s) => (s && s.id === msg.id ? { ...s, status: "new" } : s));
+        alert(data.error || `Failed to ask for details (${res.status})`);
+        return;
+      }
+
+      alert("Requested missing details from student.");
+    } catch (err) {
+      console.error("askForDetails failed", err);
+      setMessages((prev) =>
+        prev.map((m) => (m.id === msg.id ? { ...m, status: "new" } : m))
+      );
+      setSelected((s) => (s && s.id === msg.id ? { ...s, status: "new" } : s));
+      alert("Failed to request details.");
+    }
+  };
+
   // === Reply Handler ===
   const onSend = async () => {
     if (!selected) return;
     if (!reply.trim()) return alert("Type a reply first ✍️");
+
+    // prevent sending to blocked senders (frontend check)
+    const to = selected.student_email || "";
+    const blockedList = [
+      "strathmorecommunication@gmail.com",
+      "allstudents@strathmore.edu",
+      "allstaff@strathmore.edu",
+    ];
+    if (!to.endsWith("@strathmore.edu") || blockedList.includes(to)) {
+      alert("Sending is not allowed to this recipient.");
+      setMessages((prev) =>
+        prev.map((m) => (m.id === selected.id ? { ...m, status: "blocked" } : m))
+      );
+      setSelected((s) => (s && s.id === selected.id ? { ...s, status: "blocked" } : s));
+      return;
+    }
 
     setSending(true);
     setSent(false);
@@ -157,8 +314,10 @@ export default function StrathyInbox() {
         body: JSON.stringify({ message_id: selected.id, body_text: reply }),
       });
 
-      const data = await res.json();
-      if (res.status === 403 || data.error?.includes("not allowed")) {
+      const data = await res.json().catch(() => ({}));
+
+      // Handle blocked (403) or rejected emails
+      if (res.status === 403 || (data.error && /not allowed/i.test(data.error))) {
         setMessages((prev) =>
           prev.map((m) =>
             m.id === selected.id ? { ...m, status: "blocked" } : m
@@ -246,12 +405,14 @@ export default function StrathyInbox() {
                 <Loader2 className="w-4 h-4 animate-spin" /> Loading…
               </div>
             )}
+
             {!loading && paginated.length === 0 && (
               <div className="p-6 text-center text-slate-500">
                 <Inbox className="w-6 h-6 mx-auto mb-2 opacity-60" />
                 No queries
               </div>
             )}
+
             {!loading &&
               paginated.map((m) => (
                 <button
@@ -278,7 +439,7 @@ export default function StrathyInbox() {
                     {/* Status display */}
                     <div className="ml-3 text-right w-[110px] flex flex-col items-end">
                       <div className="text-xs text-slate-400 truncate max-w-full text-right">
-                        {m.from ? m.from.split("<")[0].trim() : ""}
+                        {m.student_name || (m.from ? m.from.split("<")[0].trim() : "")}
                       </div>
                       <div className="mt-1 w-full flex justify-end">
                         {m.status === "replied" && (
@@ -345,33 +506,81 @@ export default function StrathyInbox() {
             </div>
           ) : (
             <>
-              {/* Student Query */}
+              {/* Student Details + Query */}
               <div className="rounded-xl border p-4 bg-white shadow-sm">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <div
-                      className="text-xs uppercase tracking-wide"
-                      style={{ color: BRAND.blue }}
-                    >
-                      Student Query
+                <div className="flex items-start justify-between gap-4">
+                  <div className="flex-1 min-w-0">
+                    <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.blue }}>
+                      Student Details
                     </div>
-                    <div className="font-semibold text-lg">
-                      {selected.subject || "(no subject)"}
-                    </div>
-                    <div className="text-xs text-slate-500 mt-1">
-                      {selected.from}
-                    </div>
-                    {selected.received_at && (
-                      <div className="text-[11px] text-slate-400 mt-1 flex items-center gap-1">
-                        <Clock className="w-3 h-3" />{" "}
-                        {new Date(selected.received_at).toLocaleString()}
+
+                    <div className="flex items-center gap-4 mt-2">
+                      <div>
+                        <div className="text-sm font-semibold">
+                          {selected.student_name || prettyNameFromEmail(selected.student_email) || "(Unknown Student)"}
+                        </div>
+                        <div className="text-xs text-slate-500">{selected.student_email || "No email found"}</div>
                       </div>
-                    )}
+
+                      <div className="ml-auto text-right">
+                        <div className="text-[11px] text-slate-400">
+                          <span className="uppercase text-[11px] font-medium">Received</span>
+                          <div>{new Date(selected.received_at).toLocaleString()}</div>
+                        </div>
+                      </div>
+                    </div>
+
+                    <div className="mt-4 grid grid-cols-3 gap-3">
+                      <div className="bg-slate-50 p-2 rounded">
+                        <div className="text-[11px] text-slate-500">Admission No</div>
+                        <div className="font-medium">{selected.admission_number || "—"}</div>
+                      </div>
+                      <div className="bg-slate-50 p-2 rounded col-span-2">
+                        <div className="text-[11px] text-slate-500">Course · Year · Group</div>
+                        <div className="font-medium">{selected.course_group || "—"}</div>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Quick actions for details */}
+                  <div className="w-[220px] flex flex-col gap-2">
+                    <button
+                      onClick={() => askForDetails(selected)}
+                      disabled={selected.status === "blocked" || !selected.student_email}
+                      className="px-3 py-2 rounded-lg border text-sm flex items-center gap-2 hover:bg-slate-50"
+                    >
+                      <Hourglass className="w-4 h-4" />
+                      Ask for missing details
+                    </button>
+
+                    <button
+                      onClick={() => {
+                        // Quick copy email
+                        if (selected.student_email) {
+                          navigator.clipboard.writeText(selected.student_email);
+                          alert("Student email copied to clipboard");
+                        } else {
+                          alert("No email to copy");
+                        }
+                      }}
+                      className="px-3 py-2 rounded-lg border text-sm flex items-center gap-2 hover:bg-slate-50"
+                    >
+                      Copy email
+                    </button>
+
+                    <div className="text-xs text-slate-400 mt-2">Admission and group are auto-parsed from the student's message. If blank, click Ask for missing details.</div>
                   </div>
                 </div>
 
-                <div className="mt-4 text-sm text-slate-700 whitespace-pre-wrap">
-                  {selected.body}
+                <hr className="my-4" />
+
+                <div>
+                  <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.blue }}>
+                    Student Query
+                  </div>
+                  <div className="mt-3 text-sm text-slate-700 whitespace-pre-wrap">
+                    {selected.body}
+                  </div>
                 </div>
               </div>
 
@@ -388,22 +597,21 @@ export default function StrathyInbox() {
                 </div>
               ) : selected.ai_reply ? (
                 <div className="rounded-xl border p-4 bg-slate-50 mt-4">
-                  <div
-                    className="text-xs uppercase tracking-wide"
-                    style={{ color: BRAND.red }}
-                  >
+                  <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.red }}>
                     Strathy AI Response
                   </div>
                   <div className="mt-2 text-sm text-slate-800 whitespace-pre-wrap">
                     {selected.ai_reply}
                   </div>
+                  {selected.ai_replied_at && (
+                    <div className="text-[11px] text-slate-400 mt-2">
+                      <Clock className="w-3 h-3 inline-block" /> {new Date(selected.ai_replied_at).toLocaleString()}
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div className="rounded-xl border p-4 bg-white/30 text-slate-500 mt-4">
-                  <div
-                    className="text-xs uppercase tracking-wide"
-                    style={{ color: BRAND.red }}
-                  >
+                  <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.red }}>
                     Strathy AI Response
                   </div>
                   <div className="mt-2 text-sm">No automated response yet.</div>
@@ -417,18 +625,17 @@ export default function StrathyInbox() {
                 </div>
               ) : selected.status !== "escalated" ? (
                 <div className="mt-6 rounded-xl border p-4 bg-white">
-                  <div
-                    className="text-xs uppercase tracking-wide mb-2"
-                    style={{ color: BRAND.blue }}
-                  >
+                  <div className="text-xs uppercase tracking-wide mb-2" style={{ color: BRAND.blue }}>
                     Your reply
                   </div>
+
                   <textarea
                     value={reply}
                     onChange={(e) => setReply(e.target.value)}
-                    placeholder="Type your reply…"
+                    placeholder={`Reply to ${selected.student_name || "the student"}…`}
                     className="w-full min-h-[140px] p-3 rounded-xl border"
                   />
+
                   <div className="mt-3 flex items-center gap-3">
                     <button
                       onClick={onSend}
@@ -452,10 +659,7 @@ export default function StrathyInbox() {
                     </button>
 
                     {sent && (
-                      <span
-                        className="inline-flex items-center gap-1 text-sm"
-                        style={{ color: BRAND.blue }}
-                      >
+                      <span className="inline-flex items-center gap-1 text-sm" style={{ color: BRAND.blue }}>
                         <CheckCircle2 className="w-4 h-4" /> Reply sent
                       </span>
                     )}
