@@ -14,6 +14,7 @@ import {
   ChevronRight,
   ShieldAlert,
   Hourglass,
+  Copy,
 } from "lucide-react";
 
 const BRAND = {
@@ -544,33 +545,55 @@ export default function StrathyInbox() {
 
                   {/* Quick actions for details */}
                   <div className="w-[220px] flex flex-col gap-2">
-                    <button
+                      <button
                       onClick={() => askForDetails(selected)}
-                      disabled={selected.status === "blocked" || !selected.student_email}
-                      className="px-3 py-2 rounded-lg border text-sm flex items-center gap-2 hover:bg-slate-50"
-                    >
+                      disabled={
+                          selected.status === "blocked" ||
+                          !selected.student_email ||
+                          selected.prompted_for_details
+                          }
+                      className={`px-3 py-2 rounded-lg border text-sm flex items-center gap-2 hover:bg-slate-50 ${
+                          selected.prompted_for_details ? "bg-yellow-50 text-yellow-700" : ""
+                          }`}
+                      >
                       <Hourglass className="w-4 h-4" />
-                      Ask for missing details
-                    </button>
+                      {selected.prompted_for_details
+                          ? "Prompted student for details – pending"
+                          : "Ask for missing details"}
+                          </button>
 
                     <button
                       onClick={() => {
                         // Quick copy email
-                        if (selected.student_email) {
-                          navigator.clipboard.writeText(selected.student_email);
-                          alert("Student email copied to clipboard");
-                        } else {
-                          alert("No email to copy");
-                        }
-                      }}
-                      className="px-3 py-2 rounded-lg border text-sm flex items-center gap-2 hover:bg-slate-50"
-                    >
-                      Copy email
-                    </button>
+                        if (selected.admission_number) {
+                            navigator.clipboard.writeText(selected.admission_number);
+                            alert("Admission number copied to clipboard");
+                            } else {
+                                alert("No admission number available");
+                                }
+                            }}
+                        className="px-3 py-2 rounded-lg border text-sm flex items-center gap-2 hover:bg-slate-50"
+                        >
+                        <Copy className="w-4 h-4" />
+                        Copy Admission No.
+                        </button>
 
-                    <div className="text-xs text-slate-400 mt-2">Admission and group are auto-parsed from the student's message. If blank, click Ask for missing details.</div>
-                  </div>
-                </div>
+                    <button
+                    onClick={() => {
+                        if (selected.group) {
+                            navigator.clipboard.writeText(selected.group);
+                            alert("Group details copied to clipboard");
+                            } else {
+                                alert("No group details available");
+                                }
+                            }}
+                        className="px-3 py-2 rounded-lg border text-sm flex items-center gap-2 hover:bg-slate-50"
+                      >
+                        <Copy className="w-4 h-4" />
+                        Copy Course Details
+                        </button>
+                        </div>
+                        </div>
 
                 <hr className="my-4" />
 
@@ -582,7 +605,6 @@ export default function StrathyInbox() {
                     {selected.body}
                   </div>
                 </div>
-              </div>
 
               {/* AI Reply or Notices */}
               {selected.status === "blocked" ? (
@@ -670,6 +692,7 @@ export default function StrathyInbox() {
                   This message has been escalated — please follow up manually.
                 </div>
               )}
+          </div>
             </>
           )}
         </section>
