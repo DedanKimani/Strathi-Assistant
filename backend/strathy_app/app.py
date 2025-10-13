@@ -267,3 +267,61 @@ def auto_reply_job():
 scheduler = BackgroundScheduler()
 scheduler.add_job(auto_reply_job, "interval", minutes=3)
 scheduler.start()
+
+# ====== Student Details Extraction (Claude) ======
+from pydantic import BaseModel
+from anthropic import Anthropic
+import json
+
+anthropic_client = Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
+
+
+class EmailBody(BaseModel):
+    body_text: str
+
+
+@app.post("/students/extract")
+async def extract_student_details(data: EmailBody):
+    """
+    Extract structured student details from email body using Claude.
+    Returns JSON with admission number, course, etc.
+    """
+    prompt = f"""
+You are a precise data extractor.
+
+Extract student details from the following email text:
+
+---
+{data.body_text}
+---
+
+Return ONLY valid JSON with these keys:
+- name (if mentioned)
+- admission_number (e.g., S12345)
+- course (e.g., BBIT 4.2 B)
+If not found, use null.
+
+Output only valid JSON, no extra text.
+"""
+
+    try:
+        response = anthropic_client.messages.create(
+            model="claude-3-haiku-20240307",
+            max_tokens=300,
+            messages=[
+                {"role": "user", "content": prompt}
+            ],
+        )
+
+        raw_output = response.content[0].text.strip()
+
+        # Try to parse JSON safely
+        try:
+            parsed = json.loads(raw_output)
+        except json.JSONDecodeError:
+            parsed = {"error": "Claude did not return valid JSON", "raw_output": raw_output}
+
+        return parsed
+
+    except Exception as e:
+        return {"error": str(e)}
