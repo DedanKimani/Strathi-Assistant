@@ -543,6 +543,29 @@ export default function StrathyInbox() {
                     </div>
                   </div>
 
+
+{/* === Email Summary Section === */}
+{selected.message_summary && (
+  <div className="mt-3 bg-slate-50 p-3 rounded relative">
+    <div className="text-[11px] text-slate-500 mb-1 flex justify-between items-center">
+      <span>Email Summary (AI extracted)</span>
+      <button
+        onClick={() => {
+          navigator.clipboard.writeText(selected.message_summary);
+          alert("Summary copied to clipboard");
+        }}
+        className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"
+      >
+        <Copy className="w-3 h-3" /> Copy
+      </button>
+    </div>
+
+    <div className="text-sm text-slate-700 whitespace-pre-wrap">
+      {selected.message_summary}
+    </div>
+  </div>
+)}
+
                   {/* Quick actions for details */}
                   <div className="w-[220px] flex flex-col gap-2">
                       <button

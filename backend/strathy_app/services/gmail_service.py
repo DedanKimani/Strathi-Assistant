@@ -146,6 +146,8 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
         parsed = parse_message(full)
         sender_header = parsed.get("sender", "")
         sender_email = _extract_email(sender_header)
+        thread_id = parsed.get("thread_id")
+        thread_messages = extract_thread_messages(service, thread_id) if thread_id else []
         if not sender_email:
             return None
 
@@ -290,3 +292,32 @@ def get_ai_reply_for_thread(service, thread_id: str) -> Optional[str]:
     except HttpError as e:
         logger.error("Failed to fetch AI reply for thread %s: %s", thread_id, e)
         return None
+
+def extract_thread_messages(service, thread_id: str) -> List[Dict]:
+    """Return all messages in a Gmail thread, parsed into a structured list."""
+    try:
+        thread = service.users().threads().get(userId="me", id=thread_id, format="full").execute()
+        messages = thread.get("messages", [])
+        extracted = []
+
+        for msg in messages:
+            parsed = parse_message(msg)
+            sender_header = parsed.get("sender", "")
+            sender_email = _extract_email(sender_header)
+            role = "strathy" if sender_email and "strathy@strathmore.edu" in sender_email.lower() else "student"
+            extracted.append({
+                "id": msg.get("id"),
+                "sender": sender_header,
+                "sender_email": sender_email,
+                "subject": parsed.get("subject"),
+                "body": parsed.get("body"),
+                "role": role,
+                "date": datetime.fromtimestamp(
+                    int(msg.get("internalDate", 0)) / 1000, tz=timezone.utc
+                ).isoformat() if msg.get("internalDate") else None,
+            })
+        return extracted
+
+    except HttpError as e:
+        logger.error("❌ Failed to extract thread %s: %s", thread_id, e)
+        return []
