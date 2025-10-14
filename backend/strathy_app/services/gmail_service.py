@@ -5,6 +5,9 @@ import re
 from typing import List, Dict, Optional
 from datetime import datetime, timezone
 
+from backend.strathy_app.services.conversation_service import save_conversation_and_messages
+from backend.strathy_app.models.models import SessionLocal, Message, Student, Conversation
+
 from google.auth.transport.requests import Request
 from google.oauth2.credentials import Credentials
 from googleapiclient.discovery import build
@@ -148,12 +151,12 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
         sender_email = _extract_email(sender_header)
         thread_id = parsed.get("thread_id")
         thread_messages = extract_thread_messages(service, thread_id) if thread_id else []
+
         if not sender_email:
             return None
 
         subject = parsed.get("subject") or "(no subject)"
         body = parsed.get("body") or ""
-        thread_id = parsed.get("thread_id")
 
         internal_date = full.get("internalDate")
         received_at = (
@@ -186,9 +189,23 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
                 "ai_reply": None,
                 "ai_replied_at": None,
                 "ai_role": None,
+                "thread_messages": thread_messages,
             }
 
-        # ✅ Generate AI reply (but only mark as replied if actually sent)
+        # ✅ Save student & conversation in DB
+        db = SessionLocal()
+        try:
+            save_result = save_conversation_and_messages(
+                db=db,
+                email_text=body,
+                subject=subject,
+                sender_email=sender_email,
+                thread_id=thread_id or msg_id,
+            )
+        finally:
+            db.close()
+
+        # ✅ Generate AI reply (only if allowed)
         ai_reply_result = generate_and_send_ai_reply(service, {
             "from": sender_header,
             "subject": subject,
@@ -196,11 +213,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             "threadId": thread_id
         })
 
-        if not ai_reply_result:
-            # No AI reply generated yet (model skipped or error)
-            status = "pending"
-        else:
-            status = ai_reply_result.get("status", "pending")
+        status = ai_reply_result.get("status", "pending") if ai_reply_result else "pending"
 
         return {
             "id": msg_id,
@@ -214,11 +227,14 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             "ai_reply": ai_reply_result.get("ai_reply") if ai_reply_result else None,
             "ai_replied_at": ai_reply_result.get("sent_at") if ai_reply_result else None,
             "ai_role": "strathy" if ai_reply_result else None,
+            "thread_messages": thread_messages,
+            "student_info": save_result.get("extracted") if save_result else {},
         }
 
     except Exception as exc:
         logger.exception("process_incoming_email failed: %s", exc)
         return None
+
 
 
 def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:

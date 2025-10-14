@@ -11,6 +11,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+from fastapi import Depends
+
 from google.oauth2.credentials import Credentials
 from google_auth_oauthlib.flow import Flow
 
@@ -115,9 +119,15 @@ def auth_callback(request: Request):
     return RedirectResponse(url="/gmail/unread")
 
 
+def get_db():
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
 # ====== Main Inbox Route ======
 @app.get("/gmail/unread")
-def gmail_unread():
+def gmail_unread(db: Session = Depends(get_db)):
     creds = _load_creds()
     if not creds:
         return JSONResponse({"ok": False, "message": "Not logged in"}, status_code=401)
@@ -147,10 +157,22 @@ def gmail_unread():
         else:
             status = "replied" if ai_reply else "pending"
 
+        # ==== Fetch Student Details from DB ====
+        student = db.query(Student).filter(Student.email == sender_email).first()
+
         previews.append({
             "id": parsed.get("message_id"),
             "threadId": thread_id,
             "from": sender,
+            "student_email": student.email if student else sender_email,
+            "student_name": student.full_name if student else "",
+            "admission_number": student.admission_number if student else "",
+            "course": student.course if student else "",
+            "year": student.year if student else "",
+            "semester": student.semester if student else "",
+            "group": student.group if student else "",
+            "course_group": f"{student.course} {student.year}.{student.semester} {student.group}" if student else "",
+            "message_summary": parsed.get("summary") or "",  # you can also generate AI summary here
             "subject": parsed.get("subject"),
             "student_query": parsed.get("body") or "",
             "ai_reply": ai_reply,
@@ -176,19 +198,36 @@ def gmail_last_reply():
 
     msg = unread[0]
     result = process_incoming_email(service, msg)
-    if result:
-        return {
-            "ok": True,
-            "subject": result["subject"],
-            "student_query": result.get("body", ""),
-            "ai_reply": result.get("ai_reply", ""),
-            "role": result["role"],
-            "status": result.get("status"),
-            "received_at": result.get("received_at"),
+    if not result:
+        return {"ok": False, "message": "No AI reply generated"}
+
+    # === Fetch student details ===
+    from backend.strathy_app.models.models import SessionLocal, Student
+    db = SessionLocal()
+    student = db.query(Student).filter(Student.email == result.get("from_email")).first()
+    db.close()
+
+    student_data = None
+    if student:
+        student_data = {
+            "full_name": student.full_name,
+            "admission_number": student.admission_number,
+            "course": student.course,
+            "year": student.year,
+            "semester": student.semester,
+            "group": student.group,
         }
 
-    return {"ok": False, "message": "No AI reply generated"}
-
+    return {
+        "ok": True,
+        "subject": result["subject"],
+        "student_query": result.get("body", ""),
+        "ai_reply": result.get("ai_reply", ""),
+        "role": result["role"],
+        "status": result.get("status"),
+        "received_at": result.get("received_at"),
+        "student_details": student_data,
+    }
 
 @app.post("/gmail/reply")
 def gmail_reply(message_id: str = Body(..., embed=True), body_text: str = Body(..., embed=True)):
@@ -325,3 +364,56 @@ Output only valid JSON, no extra text.
 
     except Exception as e:
         return {"error": str(e)}
+
+# ===== Student Details Endpoint =====
+from fastapi import Depends
+from sqlalchemy.orm import Session
+from sqlalchemy import func  # ✅ For case-insensitive email matching
+from backend.strathy_app.models.models import SessionLocal, Student
+
+
+# ===== Database Session Dependency =====
+def get_db():
+    """
+    Creates and cleans up a database session for each request.
+    """
+    db = SessionLocal()
+    try:
+        yield db
+    finally:
+        db.close()
+
+
+# ===== Get Student by Email =====
+@app.get("/students/{email}")
+def get_student_by_email(email: str, db: Session = Depends(get_db)):
+    """
+    Fetch student details by email (case-insensitive).
+    Returns JSON with student's admission number, course, year, semester, and group.
+    """
+
+    normalized_email = email.strip().lower()
+
+    # 🔍 Log what email we're searching for
+    print(f"🔍 Looking up student with email: {normalized_email}")
+
+    student = (
+        db.query(Student)
+        .filter(func.lower(Student.email) == normalized_email)
+        .first()
+    )
+
+    if not student:
+        return {"ok": False, "error": "Student not found", "email": normalized_email}
+
+    return {
+        "ok": True,
+        "full_name": student.full_name,
+        "email": student.email,
+        "admission_number": student.admission_number,
+        "course": student.course,
+        "year": student.year,
+        "semester": student.semester,
+        "group": student.group,
+        "created_at": student.created_at,
+    }

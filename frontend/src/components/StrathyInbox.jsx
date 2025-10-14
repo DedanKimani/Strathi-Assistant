@@ -118,67 +118,77 @@ export default function StrathyInbox() {
     setLoading(true);
     setSent(false);
     try {
-      const res = await fetch("/gmail/unread");
-      if (!res.ok) {
-        if (res.status === 307 || res.redirected) {
-          window.location.href = "/oauth2/login";
-          return;
-        }
-        throw new Error(`Failed to load messages (${res.status})`);
-      }
-
-      const data = await res.json();
-
-      const normalized = (Array.isArray(data) ? data : []).map((m) => {
-        // parse sender header into email & name
-        const sender = m.from || m.sender || "";
-        const { email: student_email, name: fromName } = parseEmailAddress(sender);
-        const student_name =
-          m.student_name ||
-          m.name ||
-          prettyNameFromEmail(student_email) ||
-          fromName ||
-          "";
-
-        const body = m.student_query || m.body || m.body_text || "";
-
-        // try to extract admission and course-group from body (best-effort)
-        const parsed = extractAdmissionAndGroup(body);
-
-        // normalize statuses
-        let status = (m.status || "").toLowerCase();
-        if (!status) status = m.ai_reply ? "replied" : "new";
-        if (status !== "blocked" && status !== "replied" && status !== "escalated" && status !== "pending") {
-          // preserve backend blocked if present; otherwise keep new/replied heuristics
-          status = status === "new" ? "new" : status;
-        }
-
-        return {
-          id: m.id || m.message_id || m.threadId,
-          threadId: m.threadId || m.threadId,
-          from: sender,
-          student_email,
-          student_name,
-          admission_number: m.admission_number || parsed.admission || "",
-          course_group: m.course_group || parsed.courseGroup || "",
-          subject: m.subject || "(no subject)",
-          body,
-          ai_reply: m.ai_reply || null,
-          status,
-          received_at: m.received_at || m.date || new Date().toISOString(),
-          raw: m, // keep original if needed
-        };
-      });
-
-      setMessages(normalized);
-      setSelected(normalized[0] || null);
-      setCurrentPage(1);
-    } catch (e) {
-      setError(e.message || "Something went wrong");
-    } finally {
-      setLoading(false);
+  const res = await fetch("/gmail/unread");
+  if (!res.ok) {
+    if (res.status === 307 || res.redirected) {
+      window.location.href = "/oauth2/login";
+      return;
     }
+    throw new Error(`Failed to load messages (${res.status})`);
+  }
+
+  const data = await res.json();
+
+const normalized = (Array.isArray(data) ? data : []).map((m) => {
+  const sender = m.from || m.sender || "";
+  const { email: student_email, name: fromName } = parseEmailAddress(sender);
+  const student_name =
+    m.student_name ||
+    m.name ||
+    prettyNameFromEmail(student_email) ||
+    fromName ||
+    "";
+
+  const body = m.student_query || m.body || m.body_text || "";
+  const parsed = extractAdmissionAndGroup(body);
+
+  let status = (m.status || "").toLowerCase();
+  if (!status) status = m.ai_reply ? "replied" : "new";
+  if (
+    status !== "blocked" &&
+    status !== "replied" &&
+    status !== "escalated" &&
+    status !== "pending"
+  ) {
+    status = status === "new" ? "new" : status;
+  }
+
+  return {
+    id: m.id || m.message_id || m.threadId,
+    threadId: m.threadId,
+    from: sender,
+    student_email,
+    student_name,
+
+    // 🧠 Student details
+    admission_number: m.admission_number || parsed.admission || "",
+    course: m.course || "",
+    year: m.year || "",
+    semester: m.semester || "",
+    group: m.group || "",
+    course_group: m.course_group || parsed.courseGroup || "",
+
+    subject: m.subject || "(no subject)",
+    body,
+    ai_reply: m.ai_reply || null,
+    status,
+    received_at: m.received_at || m.date || new Date().toISOString(),
+    raw: m,
+    details_status: m.details_status || "empty",
+    message_summary: m.message_summary || "",
   };
+});
+
+  // ✅ Now continue normally
+  setMessages(normalized);
+  setSelected(normalized[0] || null);
+  setCurrentPage(1);
+} catch (e) {
+  setError(e.message || "Something went wrong");
+} finally {
+  setLoading(false);
+}
+};
 
   useEffect(() => {
     fetchUnread();
@@ -237,53 +247,6 @@ export default function StrathyInbox() {
   const totalPages = Math.ceil(filtered.length / pageSize);
   const startIndex = (currentPage - 1) * pageSize;
   const paginated = filtered.slice(startIndex, startIndex + pageSize);
-
-  // === Ask for missing details (sends templated message) ===
-  const askForDetails = async (msg) => {
-    if (!msg) return;
-    // If student_email is missing or looks invalid, disable
-    const to = msg.student_email;
-    if (!to || !to.includes("@")) {
-      alert("Can't ask for details because recipient email is not available.");
-      return;
-    }
-
-    const bodyText = `Hello ${msg.student_name || "Student"},\n\nWe need a couple of quick details to help you faster:\n\n1) Admission number (e.g. S12345 or 20210001)\n2) Course-year-group (e.g. BBIT 4.2 B)\n\nPlease reply with those details and we'll help you right away.\n\nThanks,\nStrathy Support Team`;
-
-    try {
-      // mark pending locally
-      setMessages((prev) =>
-        prev.map((m) => (m.id === msg.id ? { ...m, status: "pending" } : m))
-      );
-      setSelected((s) => (s && s.id === msg.id ? { ...s, status: "pending" } : s));
-
-      const res = await fetch("/gmail/reply", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message_id: msg.id, body_text: bodyText }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || data.error) {
-        // Revert status if failed
-        setMessages((prev) =>
-          prev.map((m) => (m.id === msg.id ? { ...m, status: "new" } : m))
-        );
-        setSelected((s) => (s && s.id === msg.id ? { ...s, status: "new" } : s));
-        alert(data.error || `Failed to ask for details (${res.status})`);
-        return;
-      }
-
-      alert("Requested missing details from student.");
-    } catch (err) {
-      console.error("askForDetails failed", err);
-      setMessages((prev) =>
-        prev.map((m) => (m.id === msg.id ? { ...m, status: "new" } : m))
-      );
-      setSelected((s) => (s && s.id === msg.id ? { ...s, status: "new" } : s));
-      alert("Failed to request details.");
-    }
-  };
 
   // === Reply Handler ===
   const onSend = async () => {
@@ -500,134 +463,155 @@ export default function StrathyInbox() {
         </aside>
 
         {/* READER PANEL */}
-        <section className="flex-1 overflow-y-auto p-6 bg-white">
-          {!selected ? (
-            <div className="p-8 rounded-xl border text-center text-slate-500 mt-20">
-              <ArrowLeft className="w-6 h-6 mx-auto mb-2" /> Select a query
-            </div>
-          ) : (
-            <>
-              {/* Student Details + Query */}
-              <div className="rounded-xl border p-4 bg-white shadow-sm">
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex-1 min-w-0">
-                    <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.blue }}>
-                      Student Details
-                    </div>
 
-                    <div className="flex items-center gap-4 mt-2">
-                      <div>
-                        <div className="text-sm font-semibold">
-                          {selected.student_name || prettyNameFromEmail(selected.student_email) || "(Unknown Student)"}
-                        </div>
-                        <div className="text-xs text-slate-500">{selected.student_email || "No email found"}</div>
-                      </div>
-
-                      <div className="ml-auto text-right">
-                        <div className="text-[11px] text-slate-400">
-                          <span className="uppercase text-[11px] font-medium">Received</span>
-                          <div>{new Date(selected.received_at).toLocaleString()}</div>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="mt-4 grid grid-cols-3 gap-3">
-                      <div className="bg-slate-50 p-2 rounded">
-                        <div className="text-[11px] text-slate-500">Admission No</div>
-                        <div className="font-medium">{selected.admission_number || "—"}</div>
-                      </div>
-                      <div className="bg-slate-50 p-2 rounded col-span-2">
-                        <div className="text-[11px] text-slate-500">Course · Year · Group</div>
-                        <div className="font-medium">{selected.course_group || "—"}</div>
-                      </div>
-                    </div>
-                  </div>
-
-
-{/* === Email Summary Section === */}
-{selected.message_summary && (
-  <div className="mt-3 bg-slate-50 p-3 rounded relative">
-    <div className="text-[11px] text-slate-500 mb-1 flex justify-between items-center">
-      <span>Email Summary (AI extracted)</span>
-      <button
-        onClick={() => {
-          navigator.clipboard.writeText(selected.message_summary);
-          alert("Summary copied to clipboard");
-        }}
-        className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"
-      >
-        <Copy className="w-3 h-3" /> Copy
-      </button>
+<section className="flex-1 overflow-y-auto p-6 bg-white">
+  {!selected ? (
+    <div className="p-8 rounded-xl border text-center text-slate-500 mt-20">
+      <ArrowLeft className="w-6 h-6 mx-auto mb-2" /> Select a query
     </div>
+  ) : (
+    <>
+      {/* Student Details + Query */}
+      <div className="rounded-xl border p-4 bg-white shadow-sm">
+        <div className="flex items-start justify-between gap-6">
 
-    <div className="text-sm text-slate-700 whitespace-pre-wrap">
-      {selected.message_summary}
+          {/* === LEFT COLUMN: Student Info === */}
+          <div className="flex-1 min-w-0">
+            <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.blue }}>
+              Student Details
+            </div>
+
+            <div className="flex items-center gap-4 mt-2">
+              <div>
+                <div className="text-sm font-semibold">
+                  {selected.student_name || prettyNameFromEmail(selected.student_email) || "(Unknown Student)"}
+                </div>
+                <div className="text-xs text-slate-500">{selected.student_email || "No email found"}</div>
+              </div>
+
+              <div className="ml-auto text-right">
+                <div className="text-[11px] text-slate-400">
+                  <span className="uppercase text-[11px] font-medium">Received</span>
+                  <div>{new Date(selected.received_at).toLocaleString()}</div>
+                </div>
+              </div>
+            </div>
+
+{/* === STUDENT SUMMARY (Admission & Course) === */}
+<div className="mt-4 grid grid-cols-3 gap-3">
+  {/* Admission Number */}
+  <div className="bg-slate-50 p-2 rounded">
+    <div className="text-[11px] text-slate-500">Admission No</div>
+    <div className="font-medium">{selected.admission_number || "—"}</div>
+  </div>
+
+  {/* Course / Year / Semester / Group Box */}
+  <div className="bg-slate-50 p-2 rounded col-span-2">
+    <div className="text-[11px] text-slate-500 mb-1">Course · Year · Semester · Group</div>
+    <div className="flex flex-wrap gap-2">
+      <span className="px-2 py-1 bg-white rounded border text-sm">{selected.course || "—"}</span>
+      <span className="px-2 py-1 bg-white rounded border text-sm">{selected.year || "—"}</span>
+      <span className="px-2 py-1 bg-white rounded border text-sm">{selected.semester || "—"}</span>
+      <span className="px-2 py-1 bg-white rounded border text-sm">{selected.group || "—"}</span>
     </div>
   </div>
-)}
+</div>
 
-                  {/* Quick actions for details */}
-                  <div className="w-[220px] flex flex-col gap-2">
-                      <button
-                      onClick={() => askForDetails(selected)}
-                      disabled={
-                          selected.status === "blocked" ||
-                          !selected.student_email ||
-                          selected.prompted_for_details
-                          }
-                      className={`px-3 py-2 rounded-lg border text-sm flex items-center gap-2 hover:bg-slate-50 ${
-                          selected.prompted_for_details ? "bg-yellow-50 text-yellow-700" : ""
-                          }`}
-                      >
-                      <Hourglass className="w-4 h-4" />
-                      {selected.prompted_for_details
-                          ? "Prompted student for details – pending"
-                          : "Ask for missing details"}
-                          </button>
 
-                    <button
-                      onClick={() => {
-                        // Quick copy email
-                        if (selected.admission_number) {
-                            navigator.clipboard.writeText(selected.admission_number);
-                            alert("Admission number copied to clipboard");
-                            } else {
-                                alert("No admission number available");
-                                }
-                            }}
-                        className="px-3 py-2 rounded-lg border text-sm flex items-center gap-2 hover:bg-slate-50"
-                        >
-                        <Copy className="w-4 h-4" />
-                        Copy Admission No.
-                        </button>
 
-                    <button
+
+
+
+            {/* === EMAIL SUMMARY === */}
+            {selected.message_summary && (
+              <div className="mt-3 bg-slate-50 p-3 rounded relative">
+                <div className="text-[11px] text-slate-500 mb-1 flex justify-between items-center">
+                  <span>Email Summary (AI extracted)</span>
+                  <button
                     onClick={() => {
-                        if (selected.group) {
-                            navigator.clipboard.writeText(selected.group);
-                            alert("Group details copied to clipboard");
-                            } else {
-                                alert("No group details available");
-                                }
-                            }}
-                        className="px-3 py-2 rounded-lg border text-sm flex items-center gap-2 hover:bg-slate-50"
-                      >
-                        <Copy className="w-4 h-4" />
-                        Copy Course Details
-                        </button>
-                        </div>
-                        </div>
-
-                <hr className="my-4" />
-
-                <div>
-                  <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.blue }}>
-                    Student Query
-                  </div>
-                  <div className="mt-3 text-sm text-slate-700 whitespace-pre-wrap">
-                    {selected.body}
-                  </div>
+                      navigator.clipboard.writeText(selected.message_summary);
+                      alert("Summary copied to clipboard");
+                    }}
+                    className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"
+                  >
+                    <Copy className="w-3 h-3" /> Copy
+                  </button>
                 </div>
+
+                <div className="text-sm text-slate-700 whitespace-pre-wrap">
+                  {selected.message_summary}
+                </div>
+              </div>
+            )}
+          </div>
+
+          {/* === RIGHT COLUMN: Quick Actions === */}
+          <div className="flex flex-col items-stretch w-48 shrink-0 space-y-2">
+
+            {/* STATUS BADGE */}
+            {selected.details_status && (
+              <div className="text-xs flex items-center justify-center gap-2 text-center px-2 py-1 rounded-md border bg-slate-50">
+                {selected.details_status === "complete" && (
+                  <span className="inline-flex items-center gap-1 text-green-600">
+                    <CheckCircle2 className="w-3 h-3" /> Details complete
+                  </span>
+                )}
+                {["partial", "empty"].includes(selected.details_status) && (
+                  <span className="inline-flex items-center gap-1 text-yellow-700">
+                    <Hourglass className="w-3 h-3" /> Requested — waiting for response
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* ACTION BUTTONS */}
+
+            <button
+              onClick={() => {
+                if (selected.admission_number) {
+                  navigator.clipboard.writeText(selected.admission_number);
+                  alert("Admission number copied to clipboard");
+                } else {
+                  alert("No admission number available");
+                }
+              }}
+              className="px-3 py-2 rounded-lg border text-sm flex justify-center items-center gap-2 hover:bg-slate-50"
+            >
+              <Copy className="w-4 h-4" />
+              Copy Admission No.
+            </button>
+
+            <button
+              onClick={() => {
+                if (selected.course_group) {
+                  navigator.clipboard.writeText(selected.course_group);
+                  alert("Course details copied to clipboard");
+                } else {
+                  alert("No course details available");
+                }
+              }}
+              className="px-3 py-2 rounded-lg border text-sm flex justify-center items-center gap-2 hover:bg-slate-50"
+            >
+              <Copy className="w-4 h-4" />
+              Copy Course Details
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <hr className="my-4" />
+
+      {/* === STUDENT QUERY BODY === */}
+      <div>
+        <div className="text-xs uppercase tracking-wide" style={{ color: BRAND.blue }}>
+          Student Query
+        </div>
+        <div className="mt-3 text-sm text-slate-700 whitespace-pre-wrap">
+          {selected.body}
+        </div>
+      </div>
+
+
 
               {/* AI Reply or Notices */}
               {selected.status === "blocked" ? (
@@ -715,7 +699,6 @@ export default function StrathyInbox() {
                   This message has been escalated — please follow up manually.
                 </div>
               )}
-          </div>
             </>
           )}
         </section>
