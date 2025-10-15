@@ -1,14 +1,11 @@
-# backend/strathy_app/models/models.py
-
-from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey
+from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, create_engine
 from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import relationship
+from sqlalchemy.orm import relationship, sessionmaker
 from datetime import datetime
 import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 
 Base = declarative_base()
+
 
 class Student(Base):
     __tablename__ = "students"
@@ -21,6 +18,10 @@ class Student(Base):
     semester = Column(String, nullable=True)
     group = Column(String, nullable=True)
     email = Column(String, unique=True, index=True)
+
+    # 🆕 Added column to store AI-generated summary of the student's email thread
+    full_thread_summary = Column(Text, nullable=True)
+
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
@@ -56,10 +57,12 @@ class Message(Base):
     conversation = relationship("Conversation", back_populates="messages")
 
 
-# Database setup
+# 🗄️ Database setup
 DATABASE_URL = os.getenv("DATABASE_URL")
 engine = create_engine(DATABASE_URL)
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
+
 def init_db():
+    """Initialize database tables if they don't exist."""
     Base.metadata.create_all(bind=engine)
