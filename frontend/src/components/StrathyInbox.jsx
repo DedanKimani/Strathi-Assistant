@@ -497,7 +497,7 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
               </div>
             </div>
 
-{/* === STUDENT SUMMARY (Admission & Course) === */}
+{/* === STUDENT DETAILS (Admission & Course) === */}
 <div className="mt-4 grid grid-cols-3 gap-3">
   {/* Admission Number */}
   <div className="bg-slate-50 p-2 rounded">
@@ -516,10 +516,6 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
     </div>
   </div>
 </div>
-
-
-
-
 
 
             {/* === EMAIL SUMMARY === */}

@@ -7,15 +7,14 @@ from .student_service import create_or_update_student
 from backend.strathy_app.services.model_extraction_service import extract_student_details
 
 
-
 def save_conversation_and_messages(db: Session, email_text: str, subject: str, sender_email: str, thread_id: str):
     """
     1. Extracts student details from email_text.
-    2. Creates or updates the student.
+    2. Creates or updates the student (now includes full_thread_summary).
     3. Saves the conversation and message to the DB.
     """
 
-    # 🔍 Extract student details from the message using your model
+    # 🔍 Extract student details from the message using your AI model
     extracted = extract_student_details(email_text)
 
     # Construct student data payload for DB
@@ -27,12 +26,14 @@ def save_conversation_and_messages(db: Session, email_text: str, subject: str, s
         "semester": extracted.get("semester"),
         "group": extracted.get("group"),
         "email": sender_email,
+        # 🆕 Add AI-generated summary of the full thread/message
+        "full_thread_summary": extracted.get("message_summary"),
     }
 
-    # Create or update student record
+    # 🏫 Create or update the student record
     student = create_or_update_student(db, student_data)
 
-    # Check if conversation already exists
+    # 🎯 Check if conversation already exists
     convo = (
         db.query(Conversation)
         .filter(Conversation.thread_id == thread_id)
@@ -53,7 +54,7 @@ def save_conversation_and_messages(db: Session, email_text: str, subject: str, s
         convo.last_updated = datetime.utcnow()
         db.commit()
 
-    # Save the message itself
+    # 💬 Save the message itself
     new_msg = Message(
         message_id=f"{thread_id}-{datetime.utcnow().timestamp()}",
         conversation_id=convo.id,
@@ -69,4 +70,10 @@ def save_conversation_and_messages(db: Session, email_text: str, subject: str, s
     db.commit()
     db.refresh(new_msg)
 
-    return {"student": student, "conversation": convo, "message": new_msg, "extracted": extracted}
+    # ✅ Return everything for logging or frontend use
+    return {
+        "student": student,
+        "conversation": convo,
+        "message": new_msg,
+        "extracted": extracted,
+    }
