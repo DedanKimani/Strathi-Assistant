@@ -9,15 +9,14 @@ from backend.strathy_app.services.model_extraction_service import extract_studen
 
 def save_conversation_and_messages(db: Session, email_text: str, subject: str, sender_email: str, thread_id: str):
     """
-    1. Extracts student details from email_text.
-    2. Creates or updates the student (now includes full_thread_summary).
-    3. Saves the conversation and message to the DB.
+    Extracts student details, saves/updates the student, and stores
+    thread-specific info (summary, missing fields, follow-up) in the Conversation table.
     """
 
-    # 🔍 Extract student details from the message using your AI model
-    extracted = extract_student_details(email_text)
+    # 🔍 Extract structured info from message text
+    extracted = extract_student_details(email_text) or {}
 
-    # Construct student data payload for DB
+    # 🧠 Student-level data (stable identity info)
     student_data = {
         "full_name": extracted.get("full_name"),
         "admission_number": extracted.get("admission_number"),
@@ -26,23 +25,23 @@ def save_conversation_and_messages(db: Session, email_text: str, subject: str, s
         "semester": extracted.get("semester"),
         "group": extracted.get("group"),
         "email": sender_email,
-        "details_status": extracted.get("details_status"),
-        "missing_fields": extracted.get("missing_fields"),
-        "follow_up_message": extracted.get("follow_up_message"),
-
-        # 🆕 Add AI-generated summary of the full thread/message
-        "full_thread_summary": extracted.get("message_summary"),
     }
 
-    # 🏫 Create or update the student record
+    # 🏫 Create or update Student record
     student = create_or_update_student(db, student_data)
 
-    # 🎯 Check if conversation already exists
+    # 🎯 Find or create Conversation record (thread-level)
     convo = (
         db.query(Conversation)
         .filter(Conversation.thread_id == thread_id)
         .first()
     )
+
+    # Extract per-thread fields (defaults ensure data safety)
+    full_thread_summary = extracted.get("full_thread_summary") or ""
+    details_status = extracted.get("details_status") or "empty"
+    missing_fields = extracted.get("missing_fields") or []
+    follow_up_message = extracted.get("follow_up_message") or ""
 
     if not convo:
         convo = Conversation(
@@ -50,15 +49,24 @@ def save_conversation_and_messages(db: Session, email_text: str, subject: str, s
             student_id=student.id,
             subject=subject,
             last_updated=datetime.utcnow(),
+            full_thread_summary=full_thread_summary,
+            details_status=details_status,
+            missing_fields=missing_fields,
+            follow_up_message=follow_up_message,
         )
         db.add(convo)
-        db.commit()
-        db.refresh(convo)
     else:
+        # 🧩 Only update fields if new data is available
         convo.last_updated = datetime.utcnow()
-        db.commit()
+        convo.full_thread_summary = full_thread_summary or convo.full_thread_summary
+        convo.details_status = details_status or convo.details_status
+        convo.missing_fields = missing_fields or convo.missing_fields
+        convo.follow_up_message = follow_up_message or convo.follow_up_message
 
-    # 💬 Save the message itself
+    db.commit()
+    db.refresh(convo)
+
+    # 💬 Store the actual message content
     new_msg = Message(
         message_id=f"{thread_id}-{datetime.utcnow().timestamp()}",
         conversation_id=convo.id,
@@ -74,7 +82,6 @@ def save_conversation_and_messages(db: Session, email_text: str, subject: str, s
     db.commit()
     db.refresh(new_msg)
 
-    # ✅ Return everything for logging or frontend use
     return {
         "student": student,
         "conversation": convo,

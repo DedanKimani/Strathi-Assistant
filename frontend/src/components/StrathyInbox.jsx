@@ -167,7 +167,7 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
     semester: m.semester || "",
     group: m.group || "",
     course_group: m.course_group || parsed.courseGroup || "",
-        full_thread_summary: m.full_thread_summary || "",
+    full_thread_summary: m.full_thread_summary || "",
 
 
     subject: m.subject || "(no subject)",
@@ -177,7 +177,6 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
     received_at: m.received_at || m.date || new Date().toISOString(),
     raw: m,
     details_status: m.details_status || "empty",
-    message_summary: m.message_summary || "",
   };
 });
 

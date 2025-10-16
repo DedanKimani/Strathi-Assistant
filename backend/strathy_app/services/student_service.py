@@ -1,49 +1,87 @@
 # backend/strathy_app/services/student_service.py
 
 from sqlalchemy.orm import Session
-from backend.strathy_app.models.models import Student
+from backend.strathy_app.models.models import Student, Conversation
 import json
 
 def get_student_by_email(db: Session, email: str):
     return db.query(Student).filter(Student.email == email).first()
 
 
-def create_or_update_student(db: Session, data: dict):
+def create_or_update_student(db: Session, data: dict, thread_id: str = None):
     """
     Create or update a student record.
     Expected keys: full_name, admission_number, course, year, semester, group, email
-    Also supports: details_status, missing_fields (list or json), follow_up_message, full_thread_summary
+    Conversation-related keys (details_status, missing_fields, follow_up_message, full_thread_summary)
+    are now handled separately per conversation.
     """
     if not data.get("email"):
         raise ValueError("Email is required")
 
     student = get_student_by_email(db, data["email"])
 
-    # Normalize missing_fields if provided as list -> dict/jsonb
+    # Normalize missing_fields if provided as list or JSON string
     if "missing_fields" in data and data["missing_fields"] is not None:
         mf = data["missing_fields"]
-        # If it's a string (JSON), try to load
         if isinstance(mf, str):
             try:
                 data["missing_fields"] = json.loads(mf)
             except Exception:
-                # fallback: keep as string inside array
                 data["missing_fields"] = [mf]
-        # if it's list, leave it
         elif not isinstance(mf, (list, dict)):
-            # convert scalar to list
             data["missing_fields"] = [mf]
 
+    # --- Handle Student fields only ---
+    student_fields = {
+        "full_name",
+        "admission_number",
+        "course",
+        "year",
+        "semester",
+        "group",
+        "email",
+    }
+
+    student_data = {k: v for k, v in data.items() if k in student_fields}
+
     if student:
-        # Update only non-empty fields; allow explicit empty string to clear some fields if needed
-        for key, value in data.items():
-            if hasattr(student, key) and value is not None:
+        for key, value in student_data.items():
+            if value is not None:
                 setattr(student, key, value)
     else:
-        # Filter fields to model init
-        init_data = {k: v for k, v in data.items() if hasattr(Student, k)}
-        student = Student(**init_data)
+        student = Student(**student_data)
         db.add(student)
+        db.commit()
+        db.refresh(student)
+
+    # --- Handle Conversation fields if thread_id provided ---
+    if thread_id:
+        convo_fields = {
+            "details_status",
+            "missing_fields",
+            "follow_up_message",
+            "full_thread_summary",
+        }
+
+        convo_data = {k: v for k, v in data.items() if k in convo_fields}
+
+        if convo_data:
+            conversation = (
+                db.query(Conversation)
+                .filter(Conversation.thread_id == thread_id)
+                .first()
+            )
+
+            if not conversation:
+                conversation = Conversation(
+                    student_id=student.id,
+                    thread_id=thread_id,
+                )
+                db.add(conversation)
+
+            for key, value in convo_data.items():
+                if value is not None:
+                    setattr(conversation, key, value)
 
     db.commit()
     db.refresh(student)

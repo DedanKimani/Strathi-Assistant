@@ -2,12 +2,10 @@ from sqlalchemy import Column, Integer, String, Text, DateTime, ForeignKey, crea
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from datetime import datetime
-import os
-from sqlalchemy import create_engine
-from sqlalchemy.orm import sessionmaker
 from sqlalchemy.dialects.postgresql import JSONB
-
 from dotenv import load_dotenv
+import os
+
 # ====== Setup ======
 load_dotenv()
 
@@ -17,10 +15,12 @@ if not DATABASE_URL:
     raise ValueError("❌ DATABASE_URL is not set in .env")
 
 engine = create_engine(DATABASE_URL)
-
 Base = declarative_base()
 
 
+# =========================
+# 🧑‍🎓 STUDENT MODEL
+# =========================
 class Student(Base):
     __tablename__ = "students"
 
@@ -33,22 +33,17 @@ class Student(Base):
     group = Column(String, nullable=True)
     email = Column(String, unique=True, index=True)
 
-    # New fields
-    details_status = Column(String(20), nullable=False, default="empty")  # "complete"|"partial"|"empty"
-    missing_fields = Column(JSONB, nullable=False, default=list)         # JSON array of missing fields
-    follow_up_message = Column(Text, nullable=True)                     # short follow-up text
-    full_thread_summary = Column(Text, nullable=True)                   # AI summary of whole thread
-
-
-
-
-
+    # 🕓 Audit fields
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 
+    # Relationships
     conversations = relationship("Conversation", back_populates="student")
 
 
+# =========================
+# 💬 CONVERSATION MODEL
+# =========================
 class Conversation(Base):
     __tablename__ = "conversations"
 
@@ -58,10 +53,20 @@ class Conversation(Base):
     subject = Column(String)
     last_updated = Column(DateTime, default=datetime.utcnow)
 
+    # 🆕 Per-thread extracted fields (moved from Student)
+    full_thread_summary = Column(Text, nullable=True)
+    details_status = Column(String(20), nullable=False, default="empty")  # 'complete' | 'partial' | 'empty'
+    missing_fields = Column(JSONB, nullable=False, default=list)
+    follow_up_message = Column(Text, nullable=True)
+
+    # Relationships
     student = relationship("Student", back_populates="conversations")
     messages = relationship("Message", back_populates="conversation")
 
 
+# =========================
+# ✉️ MESSAGE MODEL
+# =========================
 class Message(Base):
     __tablename__ = "messages"
 
@@ -78,9 +83,9 @@ class Message(Base):
     conversation = relationship("Conversation", back_populates="messages")
 
 
-# 🗄️ Database setup
-DATABASE_URL = os.getenv("DATABASE_URL")
-engine = create_engine(DATABASE_URL)
+# =========================
+# ⚙️ DATABASE INIT
+# =========================
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
 
 

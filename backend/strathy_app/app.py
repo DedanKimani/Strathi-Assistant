@@ -10,7 +10,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
-from backend.strathy_app.models.models import Student, SessionLocal  # ✅ Make sure this import is present
+from backend.strathy_app.models.models import Student, Conversation, SessionLocal  # ✅ Make sure this import is present
 
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -126,12 +126,13 @@ def get_db():
         yield db
     finally:
         db.close()
+
 # ====== Main Inbox Route ======
 @app.get("/gmail/unread")
 def gmail_unread(db: Session = Depends(get_db)):
     """
     Fetch unread Gmail messages, parse sender info,
-    enrich with student details from the database,
+    enrich with student + conversation details from the database,
     and include AI and summary data.
     """
     creds = _load_creds()
@@ -153,18 +154,23 @@ def gmail_unread(db: Session = Depends(get_db)):
         sender_email = sender.split("<")[-1].strip(">").lower()
         ai_reply = get_ai_reply_for_thread(service, thread_id)
 
-        # Determine sender permission
+        # 🔒 Determine sender permission
         allowed = is_sender_allowed(sender_email)
 
-        # Assign correct status
+        # 📩 Assign status
         if not allowed:
             status = "blocked"
             ai_reply = None
         else:
             status = "replied" if ai_reply else "pending"
 
-        # ==== Fetch Student Details from DB ====
+        # 🧩 Fetch Student and Conversation
         student = db.query(Student).filter(Student.email == sender_email).first()
+        conversation = (
+            db.query(Conversation)
+            .filter(Conversation.thread_id == thread_id)
+            .first()
+        )
 
         # ==== Build preview response ====
         preview = {
@@ -189,15 +195,18 @@ def gmail_unread(db: Session = Depends(get_db)):
             "status": status,
             "date": parsed.get("date"),
             "relative_time": parsed.get("relative_time") or "unknown time",
-            "full_thread_summary": student.full_thread_summary if student else "",
-            "details_status": student.details_status if student else "",
-            "missing_fields": student.missing_fields if student else "",
-            "follow_up_message": student.follow_up_message if student else "",
+
+            # 🆕 Per-thread (conversation) data
+            "full_thread_summary": conversation.full_thread_summary if conversation else "",
+            "details_status": conversation.details_status if conversation else "empty",
+            "missing_fields": conversation.missing_fields if conversation else [],
+            "follow_up_message": conversation.follow_up_message if conversation else "",
         }
 
         previews.append(preview)
 
     return JSONResponse(previews)
+
 
 
 @app.get("/gmail/last-reply")
@@ -401,15 +410,14 @@ def get_db():
 @app.get("/students/{email}")
 def get_student_by_email(email: str, db: Session = Depends(get_db)):
     """
-    Fetch student details by email (case-insensitive).
-    Returns JSON with student's admission number, course, year, semester, and group.
+    Fetch student details by email (case-insensitive),
+    including all related conversations and their per-thread info.
     """
 
     normalized_email = email.strip().lower()
-
-    # 🔍 Log what email we're searching for
     print(f"🔍 Looking up student with email: {normalized_email}")
 
+    # 🧩 Find the student
     student = (
         db.query(Student)
         .filter(func.lower(Student.email) == normalized_email)
@@ -417,21 +425,47 @@ def get_student_by_email(email: str, db: Session = Depends(get_db)):
     )
 
     if not student:
-        return {"ok": False, "error": "Student not found", "email": normalized_email}
+        return JSONResponse(
+            {"ok": False, "error": "Student not found", "email": normalized_email},
+            status_code=404,
+        )
 
+    # 🗂️ Get all related conversations (most recent first)
+    conversations = (
+        db.query(Conversation)
+        .filter(Conversation.student_id == student.id)
+        .order_by(Conversation.last_updated.desc())
+        .all()
+    )
+
+    # 🧵 Transform conversations into clean JSON
+    convo_data = [
+        {
+            "id": c.id,
+            "thread_id": c.thread_id,
+            "subject": c.subject,
+            "full_thread_summary": c.full_thread_summary,
+            "details_status": c.details_status,
+            "missing_fields": c.missing_fields,
+            "follow_up_message": c.follow_up_message,
+            "last_updated": c.last_updated,
+        }
+        for c in conversations
+    ]
+
+    # 🧠 Build final structured response
     return {
         "ok": True,
-        "full_name": student.full_name,
-        "email": student.email,
-        "admission_number": student.admission_number,
-        "course": student.course,
-        "year": student.year,
-        "semester": student.semester,
-        "group": student.group,
-        "full_thread_summary": student.full_thread_summary,
-        "details_status": student.details_status,
-        "missing_fields": student.missing_fields,
-        "follow_up_message": student.follow_up_message,
-        "created_at": student.created_at,
-
+        "student": {
+            "id": student.id,
+            "full_name": student.full_name,
+            "email": student.email,
+            "admission_number": student.admission_number,
+            "course": student.course,
+            "year": student.year,
+            "semester": student.semester,
+            "group": student.group,
+            "created_at": student.created_at,
+        },
+        "conversations": convo_data,
     }
