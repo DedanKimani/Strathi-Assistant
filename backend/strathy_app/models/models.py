@@ -3,6 +3,20 @@ from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import relationship, sessionmaker
 from datetime import datetime
 import os
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+from sqlalchemy.dialects.postgresql import JSONB
+
+from dotenv import load_dotenv
+# ====== Setup ======
+load_dotenv()
+
+DATABASE_URL = os.getenv("DATABASE_URL")
+
+if not DATABASE_URL:
+    raise ValueError("❌ DATABASE_URL is not set in .env")
+
+engine = create_engine(DATABASE_URL)
 
 Base = declarative_base()
 
@@ -19,8 +33,15 @@ class Student(Base):
     group = Column(String, nullable=True)
     email = Column(String, unique=True, index=True)
 
-    # 🆕 Added column to store AI-generated summary of the student's email thread
-    full_thread_summary = Column(Text, nullable=True)
+    # New fields
+    details_status = Column(String(20), nullable=False, default="empty")  # "complete"|"partial"|"empty"
+    missing_fields = Column(JSONB, nullable=False, default=list)         # JSON array of missing fields
+    follow_up_message = Column(Text, nullable=True)                     # short follow-up text
+    full_thread_summary = Column(Text, nullable=True)                   # AI summary of whole thread
+
+
+
+
 
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)

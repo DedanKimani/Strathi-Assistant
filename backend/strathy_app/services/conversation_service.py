@@ -26,6 +26,10 @@ def save_conversation_and_messages(db: Session, email_text: str, subject: str, s
         "semester": extracted.get("semester"),
         "group": extracted.get("group"),
         "email": sender_email,
+        "details_status": extracted.get("details_status"),
+        "missing_fields": extracted.get("missing_fields"),
+        "follow_up_message": extracted.get("follow_up_message"),
+
         # 🆕 Add AI-generated summary of the full thread/message
         "full_thread_summary": extracted.get("message_summary"),
     }

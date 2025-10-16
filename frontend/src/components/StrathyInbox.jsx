@@ -167,6 +167,8 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
     semester: m.semester || "",
     group: m.group || "",
     course_group: m.course_group || parsed.courseGroup || "",
+        full_thread_summary: m.full_thread_summary || "",
+
 
     subject: m.subject || "(no subject)",
     body,
@@ -507,7 +509,7 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
 
   {/* Course / Year / Semester / Group Box */}
   <div className="bg-slate-50 p-2 rounded col-span-2">
-    <div className="text-[11px] text-slate-500 mb-1">Course · Year · Semester · Group</div>
+    <div className="text-[11px] text-slate-500 mb-1">Course  ·  Year  ·  Semester  ·  Group</div>
     <div className="flex flex-wrap gap-2">
       <span className="px-2 py-1 bg-white rounded border text-sm">{selected.course || "—"}</span>
       <span className="px-2 py-1 bg-white rounded border text-sm">{selected.year || "—"}</span>
@@ -518,28 +520,28 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
 </div>
 
 
-            {/* === EMAIL SUMMARY === */}
-            {selected.message_summary && (
-              <div className="mt-3 bg-slate-50 p-3 rounded relative">
-                <div className="text-[11px] text-slate-500 mb-1 flex justify-between items-center">
-                  <span>Email Summary (AI extracted)</span>
-                  <button
-                    onClick={() => {
-                      navigator.clipboard.writeText(selected.message_summary);
-                      alert("Summary copied to clipboard");
-                    }}
-                    className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"
-                  >
-                    <Copy className="w-3 h-3" /> Copy
-                  </button>
-                </div>
+           {/* 🧠 Full Thread Summary (AI overview) */}
+    {selected.full_thread_summary && (
+      <div className="bg-slate-50 p-3 rounded relative border border-slate-200">
+        <div className="text-[11px] text-slate-500 mb-1 flex justify-between items-center">
+          <span>Full Thread Summary (AI overview)</span>
+          <button
+            onClick={() => {
+              navigator.clipboard.writeText(selected.full_thread_summary);
+              alert("Full thread summary copied to clipboard");
+            }}
+            className="text-[11px] text-blue-600 hover:underline flex items-center gap-1"
+          >
+            <Copy className="w-3 h-3" /> Copy
+          </button>
+        </div>
 
-                <div className="text-sm text-slate-700 whitespace-pre-wrap">
-                  {selected.message_summary}
-                </div>
-              </div>
-            )}
-          </div>
+        <div className="text-sm text-slate-700 whitespace-pre-wrap">
+          {selected.full_thread_summary}
+        </div>
+      </div>
+    )}
+  </div>
 
           {/* === RIGHT COLUMN: Quick Actions === */}
           <div className="flex flex-col items-stretch w-48 shrink-0 space-y-2">

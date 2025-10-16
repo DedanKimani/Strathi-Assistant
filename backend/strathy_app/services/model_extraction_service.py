@@ -16,8 +16,8 @@ Your goal is to analyze a student's email or message and extract the following s
 - semester: The semester number as a single digit string (e.g., "1" or "2"). If not present, return "".
 - year_semester: Combined representation "year.semester" (e.g., "4.2"). If either year or semester is missing, return "".
 - group: The group or section (e.g., "A", "B", "C", "D", "E"). If not present, return "".
-- message_summary: A short summary (1–2 sentences) of what the student’s message is about (always try to provide).
-- status: One of "complete", "partial", or "empty". "complete" means full_name, admission_number, course, year, semester and group are all present. "partial" if at least one field found but not all. "empty" if none of the main fields found.
+- full_thread_summary: If this email is part of a longer thread, write a 2–4 sentence summary capturing the full context or purpose of the conversation so far.
+- details_status: One of "complete", "partial", or "empty". "complete" means full_name, admission_number, course, year, semester and group are all present. "partial" if at least one field found but not all. "empty" if none of the main fields found.
 - missing_fields: A JSON array listing the missing main fields from: ["full_name","admission_number","course","year","semester","group"].
 - follow_up_message: If status is "partial" or "empty", produce a short polite message to request the missing fields from the student. If status is "complete", return an empty string.
 
@@ -40,20 +40,22 @@ Example output:
   "semester": "2",
   "year_semester": "4.2",
   "group": "B",
-  "message_summary": "Requesting help with project submission and timetable clarification.",
-  "status": "partial",
+  "full_thread_summary": "Student has been discussing project submission deadlines and timetable updates over several messages.",
+  "details_status": "partial",
   "missing_fields": ["admission_number"],
   "follow_up_message": "Hi John, could you please share your admission number so we can assist you better?"
 }
 """
 
 def extract_student_details(email_body: str) -> dict:
-    """Send the email text to Anthropic and return structured JSON (with semester)."""
+    """
+    Send the email text to Anthropic and return structured JSON (with semester, message_summary, and full_thread_summary).
+    """
     response = client.messages.create(
         model="claude-3-5-sonnet-latest",
         system=SYSTEM_PROMPT,
         messages=[{"role": "user", "content": email_body}],
-        max_tokens=600,
+        max_tokens=3000,
         temperature=0
     )
 
@@ -63,5 +65,9 @@ def extract_student_details(email_body: str) -> dict:
         data = json.loads(content)
     except json.JSONDecodeError:
         data = {"error": "Invalid JSON returned from model", "raw": content}
+
+    # Fallback: If full_thread_summary is missing, reuse message_summary
+    if "full_thread_summary" not in data or not data.get("full_thread_summary"):
+        data["full_thread_summary"] = data.get("message_summary", "")
 
     return data

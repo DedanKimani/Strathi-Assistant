@@ -10,6 +10,7 @@ from fastapi.responses import RedirectResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
+from backend.strathy_app.models.models import Student, SessionLocal  # ✅ Make sure this import is present
 
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -128,6 +129,11 @@ def get_db():
 # ====== Main Inbox Route ======
 @app.get("/gmail/unread")
 def gmail_unread(db: Session = Depends(get_db)):
+    """
+    Fetch unread Gmail messages, parse sender info,
+    enrich with student details from the database,
+    and include AI and summary data.
+    """
     creds = _load_creds()
     if not creds:
         return JSONResponse({"ok": False, "message": "Not logged in"}, status_code=401)
@@ -160,7 +166,8 @@ def gmail_unread(db: Session = Depends(get_db)):
         # ==== Fetch Student Details from DB ====
         student = db.query(Student).filter(Student.email == sender_email).first()
 
-        previews.append({
+        # ==== Build preview response ====
+        preview = {
             "id": parsed.get("message_id"),
             "threadId": thread_id,
             "from": sender,
@@ -171,16 +178,24 @@ def gmail_unread(db: Session = Depends(get_db)):
             "year": student.year if student else "",
             "semester": student.semester if student else "",
             "group": student.group if student else "",
-            "course_group": f"{student.course} {student.year}.{student.semester} {student.group}" if student else "",
-            "message_summary": parsed.get("summary") or "",  # you can also generate AI summary here
+            "course_group": (
+                f"{student.course} {student.year}.{student.semester} {student.group}"
+                if student else ""
+            ),
             "subject": parsed.get("subject"),
             "student_query": parsed.get("body") or "",
             "ai_reply": ai_reply,
             "role": "student",
             "status": status,
             "date": parsed.get("date"),
-            "relative_time": parsed.get("relative_time") or "unknown time"
-        })
+            "relative_time": parsed.get("relative_time") or "unknown time",
+            "full_thread_summary": student.full_thread_summary if student else "",
+            "details_status": student.details_status if student else "",
+            "missing_fields": student.missing_fields if student else "",
+            "follow_up_message": student.follow_up_message if student else "",
+        }
+
+        previews.append(preview)
 
     return JSONResponse(previews)
 
@@ -202,7 +217,6 @@ def gmail_last_reply():
         return {"ok": False, "message": "No AI reply generated"}
 
     # === Fetch student details ===
-    from backend.strathy_app.models.models import SessionLocal, Student
     db = SessionLocal()
     student = db.query(Student).filter(Student.email == result.get("from_email")).first()
     db.close()
@@ -369,7 +383,6 @@ Output only valid JSON, no extra text.
 from fastapi import Depends
 from sqlalchemy.orm import Session
 from sqlalchemy import func  # ✅ For case-insensitive email matching
-from backend.strathy_app.models.models import SessionLocal, Student
 
 
 # ===== Database Session Dependency =====
@@ -415,5 +428,10 @@ def get_student_by_email(email: str, db: Session = Depends(get_db)):
         "year": student.year,
         "semester": student.semester,
         "group": student.group,
+        "full_thread_summary": student.full_thread_summary,
+        "details_status": student.details_status,
+        "missing_fields": student.missing_fields,
+        "follow_up_message": student.follow_up_message,
         "created_at": student.created_at,
+
     }
