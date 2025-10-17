@@ -508,7 +508,7 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
 
   {/* Course / Year / Semester / Group Box */}
   <div className="bg-slate-50 p-2 rounded col-span-2">
-    <div className="text-[11px] text-slate-500 mb-1">Course  ·  Year  ·  Semester  ·  Group</div>
+    <div className="text-[11px] text-slate-500 mb-1">Course · Year · Semester · Group</div>
     <div className="flex flex-wrap gap-2">
       <span className="px-2 py-1 bg-white rounded border text-sm">{selected.course || "—"}</span>
       <span className="px-2 py-1 bg-white rounded border text-sm">{selected.year || "—"}</span>
@@ -519,7 +519,7 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
 </div>
 
 
-           {/* 🧠 Full Thread Summary (AI overview) */}
+         {/* 🧠 Full Thread Summary (AI overview) */}
     {selected.full_thread_summary && (
       <div className="bg-slate-50 p-3 rounded relative border border-slate-200">
         <div className="text-[11px] text-slate-500 mb-1 flex justify-between items-center">
