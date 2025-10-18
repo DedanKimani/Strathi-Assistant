@@ -518,7 +518,7 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
   </div>
 </div>
 
-
+#
          {/* 🧠 Full Thread Summary (AI overview) */}
     {selected.full_thread_summary && (
       <div className="bg-slate-50 p-3 rounded relative border border-slate-200">
