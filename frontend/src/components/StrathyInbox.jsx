@@ -518,12 +518,12 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
   </div>
 </div>
 
-#
+
          {/* 🧠 Full Thread Summary (AI overview) */}
     {selected.full_thread_summary && (
       <div className="bg-slate-50 p-3 rounded relative border border-slate-200">
         <div className="text-[11px] text-slate-500 mb-1 flex justify-between items-center">
-          <span>Full Thread Summary (AI overview)</span>
+          <span>Full Thread Summary</span>
           <button
             onClick={() => {
               navigator.clipboard.writeText(selected.full_thread_summary);
