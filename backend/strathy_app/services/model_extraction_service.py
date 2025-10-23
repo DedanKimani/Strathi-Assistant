@@ -75,6 +75,9 @@
 import os
 import json
 from google import genai
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # Initialize Gemini client (make sure GENAI_API_KEY env var is set)
 GEMINI_API_KEY = os.getenv("GENAI_API_KEY")
