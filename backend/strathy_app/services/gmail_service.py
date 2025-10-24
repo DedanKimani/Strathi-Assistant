@@ -192,6 +192,10 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
                 "thread_messages": thread_messages,
             }
 
+        # ✅ Extract student details & AI summary
+        from backend.strathy_app.services.model_extraction_service import extract_student_details
+        ai_extraction = extract_student_details(body)
+
         # ✅ Save student & conversation in DB
         db = SessionLocal()
         try:
@@ -202,6 +206,22 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
                 sender_email=sender_email,
                 thread_id=thread_id or msg_id,
             )
+
+            # --- Update conversation with extracted AI metadata ---
+            from backend.strathy_app.models import Conversation
+            conversation = (
+                db.query(Conversation)
+                .filter(Conversation.thread_id == (thread_id or msg_id))
+                .first()
+            )
+
+            if conversation:
+                conversation.full_thread_summary = ai_extraction.get("full_thread_summary", "")
+                conversation.details_status = ai_extraction.get("details_status", "empty")
+                conversation.missing_fields = ai_extraction.get("missing_fields", [])
+                conversation.follow_up_message = ai_extraction.get("follow_up_message", "")
+                db.commit()
+
         finally:
             db.close()
 
@@ -229,6 +249,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             "ai_role": "strathy" if ai_reply_result else None,
             "thread_messages": thread_messages,
             "student_info": save_result.get("extracted") if save_result else {},
+            "ai_summary": ai_extraction.get("full_thread_summary", ""),
         }
 
     except Exception as exc:
