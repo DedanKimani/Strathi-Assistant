@@ -95,6 +95,7 @@ Your goal is to analyze a student's email or message and extract the following s
 - year_semester: Combined representation "year.semester" (e.g., "4.2"). If either year or semester is missing, return "".
 - group: The group or section (e.g., "A", "B", "C", "D", "E"). If not present, return "".
 - full_thread_summary: If this email is part of a longer thread, write a 2–4 sentence summary capturing the full context or purpose of the conversation so far.
+  Always include this summary even if only one message is provided — capture the student's intent, context, or request in a natural way.
 - details_status: One of "complete", "partial", or "empty". "complete" means full_name, admission_number, course, year, semester and group are all present. "partial" if at least one field found but not all. "empty" if none of the main fields found.
 - missing_fields: A JSON array listing the missing main fields from: ["full_name","admission_number","course","year","semester","group"].
 - follow_up_message: If status is "partial" or "empty", produce a short polite message to request the missing fields from the student. If status is "complete", return an empty string.
@@ -107,6 +108,7 @@ Rules:
   - "4.2", "4/2", "4-2" in the text should map to year "4" semester "2" and year_semester "4.2".
 - Admission numbers can be numeric-only (6 digits). Return as-is.
 - If the model is unsure about a value, leave it empty ("") and include it in missing_fields.
+- Always include a `full_thread_summary` field with a natural summary — never leave it blank.
 - Do not include any commentary — only the JSON.
 
 Example output:
@@ -130,11 +132,10 @@ def extract_student_details(email_body: str) -> dict:
     Send the email text to Gemini and return structured JSON (with semester, message_summary, and full_thread_summary).
     """
     try:
-        # Combine the system and user prompt for Gemini
         full_prompt = f"{SYSTEM_PROMPT}\n\nEmail body:\n{email_body}"
 
         response = client.models.generate_content(
-            model="gemini-2.5-pro",  # use gemini-1.5-flash for faster/cheaper
+            model="gemini-2.5-pro",
             contents=full_prompt,
             config={
                 "temperature": 0,
@@ -144,13 +145,22 @@ def extract_student_details(email_body: str) -> dict:
 
         content = response.text.strip()
 
-        # Safely parse model response (expecting pure JSON text)
+        # --- 🧹 Clean up code fences if Gemini adds them ---
+        if content.startswith("```"):
+            # Remove markdown fences like ```json ... ```
+            content = content.strip("`")
+            if content.lower().startswith("json"):
+                content = content[4:]
+            # Also strip any trailing triple backticks
+            content = content.replace("```", "").strip()
+
+        # --- 🧩 Try to parse JSON safely ---
         try:
             data = json.loads(content)
         except json.JSONDecodeError:
             data = {"error": "Invalid JSON returned from model", "raw": content}
 
-        # Fallback: If full_thread_summary missing, reuse message_summary
+        # --- 🧠 Fallback for missing summary ---
         if "full_thread_summary" not in data or not data.get("full_thread_summary"):
             data["full_thread_summary"] = data.get("message_summary", "")
 
@@ -158,3 +168,4 @@ def extract_student_details(email_body: str) -> dict:
 
     except Exception as e:
         return {"error": f"(Error generating AI extraction: {e})"}
+
