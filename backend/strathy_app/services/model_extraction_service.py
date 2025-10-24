@@ -87,7 +87,7 @@ SYSTEM_PROMPT = """You are an intelligent extraction model for university admiss
 
 Your goal is to analyze a student's email or message and extract the following structured fields:
 
-- full_name: The student's full name.
+- full_name: The student's full name. At least ONE name is okay, which is can be safe to be categorize as "Complete"
 - admission_number: The student's admission number if mentioned (examples: "148705", "156443", "BBIT/00432/23"). If not present, return "".
 - course: The course code or name (e.g., "BBIT" or "Bachelor of Business Information Technology"). If not present, return "".
 - year: The academic year as a single digit string (e.g., "1", "2", "3", "4"). If not present, return "".
