@@ -1,6 +1,14 @@
 import React, { useState } from "react";
 import { NavLink } from "react-router-dom";
-import { LayoutDashboard, Inbox, AlertTriangle, Settings, LogOut, Menu } from "lucide-react";
+import {
+  LayoutDashboard,
+  Inbox,
+  AlertTriangle,
+  Settings,
+  LogOut,
+  Menu,
+  Folder,
+} from "lucide-react";
 
 export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false); // false = expanded by default
@@ -9,6 +17,7 @@ export default function Sidebar() {
     { name: "Dashboard", to: "/", icon: LayoutDashboard },
     { name: "Inbox", to: "/inbox", icon: Inbox },
     { name: "Escalations", to: "/escalations", icon: AlertTriangle },
+    { name: "Categories", to: "/categories", icon: Folder },
     { name: "Settings", to: "/settings", icon: Settings },
   ];
 
