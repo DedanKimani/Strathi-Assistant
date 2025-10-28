@@ -3,7 +3,7 @@ import { BrowserRouter as Router, Routes, Route, Navigate } from "react-router-d
 import Sidebar from "./components/Sidebar";
 import Dashboard from "./components/Dashboard";
 import Inbox from "./components/StrathyInbox";
-// import Inbox from "./components/Inbox";
+import Categories from "./components/Categories"; // ✅ make sure this import is correct
 // import Escalations from "./components/Escalations";
 // import Settings from "./components/Settings";
 
@@ -17,7 +17,8 @@ function App() {
             <Route path="/" element={<Navigate to="/dashboard" />} />
             <Route path="/dashboard" element={<Dashboard adminName="Faith" />} />
             <Route path="/inbox" element={<Inbox />} />
-            {/*<Route path="/escalations" element={<Escalations />} />
+            <Route path="/categories" element={<Categories />} /> {/* ✅ Add this */}
+            {/* <Route path="/escalations" element={<Escalations />} />
             <Route path="/settings" element={<Settings />} /> */}
           </Routes>
         </div>

@@ -1,5 +1,19 @@
 import React, { useState } from "react";
-import { ChevronDown, ChevronRight, Users, GraduationCap } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  Users,
+  GraduationCap,
+  Calendar,
+} from "lucide-react";
+import {
+  PieChart,
+  Pie,
+  Cell,
+  Tooltip,
+  Legend,
+  ResponsiveContainer,
+} from "recharts";
 
 const categories = {
   Students: [
@@ -204,8 +218,24 @@ const categories = {
   ],
 };
 
+const studentChartData = [
+  { name: "Academics & Unit Registration", value: 75 },
+  { name: "Admissions & Enrollment", value: 10 },
+  { name: "Examinations & Assessments", value: 10 },
+  { name: "Finance & Fees", value: 5 },
+];
+
+const lecturerChartData = [
+  { name: "Teaching & Course Management", value: 60 },
+  { name: "Assessment & Examination Coordination", value: 25 },
+  { name: "Administrative & HR-Related", value: 15 },
+];
+
+const COLORS = ["#2563EB", "#38BDF8", "#10B981", "#F59E0B", "#EF4444"];
+
 export default function Categories() {
   const [openSection, setOpenSection] = useState({});
+  const [timeFilter, setTimeFilter] = useState("This Month");
 
   const toggleSection = (role, index) => {
     setOpenSection((prev) => ({
@@ -214,23 +244,92 @@ export default function Categories() {
     }));
   };
 
-  return (
-    <div className="p-6 bg-gray-50 min-h-screen">
-      <h1 className="text-3xl font-bold text-blue-900 mb-8">
-        Categories Overview
-      </h1>
+  const handleClick = (sub) => {
+    console.log("Clicked:", sub);
+    // Placeholder for future modal or analytics tracking
+  };
 
+  return (
+    <div className="p-6 bg-gray-50 min-h-screen overflow-hidden">
+      {/* HEADER */}
+      <div className="flex items-center justify-between mb-6">
+        <h1 className="text-3xl font-bold text-blue-900">Categories Overview</h1>
+        <div className="flex items-center gap-2 bg-white px-3 py-2 rounded-xl shadow">
+          <Calendar className="text-blue-700 w-5 h-5" />
+          <select
+            value={timeFilter}
+            onChange={(e) => setTimeFilter(e.target.value)}
+            className="bg-transparent outline-none text-gray-700"
+          >
+            <option>This Week</option>
+            <option>This Month</option>
+            <option>This Year</option>
+          </select>
+        </div>
+      </div>
+
+      {/* ANALYTICS SECTION */}
+      <div className="grid md:grid-cols-2 gap-6 mb-10">
+        <div className="bg-white p-4 rounded-2xl shadow-lg border border-blue-100">
+          <h2 className="text-lg font-semibold text-blue-900 mb-3">
+            Student Category Trends
+          </h2>
+{/*           <ResponsiveContainer width="100%" height={250}> */}
+{/*             <PieChart> */}
+{/*               <Pie */}
+{/*                 data={studentChartData} */}
+{/*                 cx="50%" */}
+{/*                 cy="50%" */}
+{/*                 outerRadius={80} */}
+{/*                 dataKey="value" */}
+{/*               > */}
+{/*                 {studentChartData.map((entry, index) => ( */}
+{/*                   <Cell key={`s-${index}`} fill={COLORS[index % COLORS.length]} /> */}
+{/*                 ))} */}
+{/*               </Pie> */}
+{/*               <Tooltip /> */}
+{/*               <Legend /> */}
+{/*             </PieChart> */}
+{/*           </ResponsiveContainer> */}
+        </div>
+
+        <div className="bg-white p-4 rounded-2xl shadow-lg border border-blue-100">
+          <h2 className="text-lg font-semibold text-blue-900 mb-3">
+            Lecturer Category Trends
+          </h2>
+{/*           <ResponsiveContainer width="100%" height={250}> */}
+{/*             <PieChart> */}
+{/*               <Pie */}
+{/*                 data={lecturerChartData} */}
+{/*                 cx="50%" */}
+{/*                 cy="50%" */}
+{/*                 outerRadius={80} */}
+{/*                 dataKey="value" */}
+{/*               > */}
+{/*                 {lecturerChartData.map((entry, index) => ( */}
+{/*                   <Cell key={`l-${index}`} fill={COLORS[index % COLORS.length]} /> */}
+{/*                 ))} */}
+{/*               </Pie> */}
+{/*               <Tooltip /> */}
+{/*               <Legend /> */}
+{/*             </PieChart> */}
+{/*           </ResponsiveContainer> */}
+        </div>
+      </div>
+
+      {/* CATEGORIES */}
       <div className="grid md:grid-cols-2 gap-6">
-        {/* STUDENT SECTION */}
-        <div className="bg-white rounded-2xl shadow-lg p-4 border border-blue-100">
-          <div className="flex items-center mb-4">
+        {/* STUDENTS */}
+        <div className="bg-white rounded-2xl shadow-lg p-6 border border-blue-100 max-h-[70vh] overflow-y-auto">
+          <div className="flex items-center mb-4 sticky top-0 bg-white pb-2">
             <GraduationCap className="text-blue-800 w-6 h-6 mr-2" />
             <h2 className="text-xl font-semibold text-blue-900">Students</h2>
           </div>
+
           {categories.Students.map((cat, index) => (
-            <div key={index} className="mb-2 border-b border-gray-200">
+            <div key={index} className="mb-3 border-b border-gray-200 pb-2">
               <button
-                className="flex justify-between w-full py-2 text-left font-medium text-gray-800 hover:text-blue-700"
+                className="flex justify-between w-full py-2 text-left font-medium text-gray-800 hover:text-blue-700 transition"
                 onClick={() => toggleSection("Students", index)}
               >
                 {cat.main}
@@ -241,26 +340,33 @@ export default function Categories() {
                 )}
               </button>
               {openSection[`Students-${index}`] && (
-                <ul className="ml-4 mb-3 list-disc text-sm text-gray-600 space-y-1">
+                <div className="grid grid-cols-2 gap-2 mt-2">
                   {cat.sub.map((sub, i) => (
-                    <li key={i}>{sub}</li>
+                    <button
+                      key={i}
+                      onClick={() => handleClick(sub)}
+                      className="px-3 py-2 text-sm bg-blue-50 hover:bg-blue-100 text-blue-800 rounded-full transition font-medium shadow-sm hover:shadow-md"
+                    >
+                      {sub}
+                    </button>
                   ))}
-                </ul>
+                </div>
               )}
             </div>
           ))}
         </div>
 
-        {/* LECTURER SECTION */}
-        <div className="bg-white rounded-2xl shadow-lg p-4 border border-blue-100">
-          <div className="flex items-center mb-4">
+        {/* LECTURERS */}
+        <div className="bg-white rounded-2xl shadow-lg p-6 border border-blue-100 max-h-[70vh] overflow-y-auto">
+          <div className="flex items-center mb-4 sticky top-0 bg-white pb-2">
             <Users className="text-blue-800 w-6 h-6 mr-2" />
             <h2 className="text-xl font-semibold text-blue-900">Lecturers</h2>
           </div>
+
           {categories.Lecturers.map((cat, index) => (
-            <div key={index} className="mb-2 border-b border-gray-200">
+            <div key={index} className="mb-3 border-b border-gray-200 pb-2">
               <button
-                className="flex justify-between w-full py-2 text-left font-medium text-gray-800 hover:text-blue-700"
+                className="flex justify-between w-full py-2 text-left font-medium text-gray-800 hover:text-blue-700 transition"
                 onClick={() => toggleSection("Lecturers", index)}
               >
                 {cat.main}
@@ -271,11 +377,17 @@ export default function Categories() {
                 )}
               </button>
               {openSection[`Lecturers-${index}`] && (
-                <ul className="ml-4 mb-3 list-disc text-sm text-gray-600 space-y-1">
+                <div className="grid grid-cols-2 gap-2 mt-2">
                   {cat.sub.map((sub, i) => (
-                    <li key={i}>{sub}</li>
+                    <button
+                      key={i}
+                      onClick={() => handleClick(sub)}
+                      className="px-3 py-2 text-sm bg-blue-50 hover:bg-blue-100 text-blue-800 rounded-full transition font-medium shadow-sm hover:shadow-md"
+                    >
+                      {sub}
+                    </button>
                   ))}
-                </ul>
+                </div>
               )}
             </div>
           ))}
