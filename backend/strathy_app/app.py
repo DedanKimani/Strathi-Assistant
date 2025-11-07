@@ -11,7 +11,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 from backend.strathy_app.models.models import Student, Conversation, SessionLocal  # ✅ Make sure this import is present
-
+from backend.strathy_app.services.model_extraction_service import extract_student_details  # create this
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 from fastapi import Depends
@@ -33,6 +33,13 @@ from .services.gmail_service import (
 )
 from .utils.email_parser import parse_message
 from .utils.mime_helpers import build_reply_mime
+
+# Import the synchronous extraction helper at the top
+from backend.strathy_app.services.model_extraction_service import extract_student_details
+from fastapi.responses import JSONResponse
+from sqlalchemy.orm import Session
+from fastapi import Depends
+
 
 
 # ====== Setup ======
@@ -130,11 +137,6 @@ def get_db():
 # ====== Main Inbox Route ======
 @app.get("/gmail/unread")
 def gmail_unread(db: Session = Depends(get_db)):
-    """
-    Fetch unread Gmail messages, parse sender info,
-    enrich with student + conversation details from the database,
-    and include AI and summary data.
-    """
     creds = _load_creds()
     if not creds:
         return JSONResponse({"ok": False, "message": "Not logged in"}, status_code=401)
@@ -150,33 +152,39 @@ def gmail_unread(db: Session = Depends(get_db)):
 
         parsed = parse_message(full)
         thread_id = parsed.get("thread_id")
-        sender = parsed.get("sender") or ""
-        sender_email = sender.split("<")[-1].strip(">").lower()
-        ai_reply = get_ai_reply_for_thread(service, thread_id)
+        sender_email = (parsed.get("sender") or "").split("<")[-1].strip(">").lower()
 
-        # 🔒 Determine sender permission
-        allowed = is_sender_allowed(sender_email)
+        student = db.query(Student).filter(func.lower(Student.email) == sender_email).first()
+        conversation = db.query(Conversation).filter(Conversation.thread_id == thread_id).first()
 
-        # 📩 Assign status
-        if not allowed:
-            status = "blocked"
-            ai_reply = None
+        if not conversation:
+            conversation = Conversation(
+                student_id=student.id if student else None,
+                thread_id=thread_id,
+                subject=parsed.get("subject"),
+                message_body=parsed.get("body")  # <- SAVE the email body here
+            )
+            db.add(conversation)
         else:
-            status = "replied" if ai_reply else "pending"
+            conversation.message_body = parsed.get("body")  # <- update existing row
+        db.commit()
 
-        # 🧩 Fetch Student and Conversation
-        student = db.query(Student).filter(Student.email == sender_email).first()
-        conversation = (
-            db.query(Conversation)
-            .filter(Conversation.thread_id == thread_id)
-            .first()
-        )
+        # Auto-extract if message_body exists and details are missing
+        if conversation and conversation.message_body and conversation.details_status in [None, "", "empty"]:
+            try:
+                extracted = extract_student_details(conversation.message_body)
+                conversation.full_thread_summary = extracted.get("full_thread_summary", "")
+                conversation.details_status = extracted.get("details_status", "empty")
+                conversation.missing_fields = extracted.get("missing_fields", [])
+                conversation.follow_up_message = extracted.get("follow_up_message", "")
+                db.commit()
+            except Exception as e:
+                print(f"⚠️ Extraction failed for conversation {conversation.id}: {e}")
 
-        # ==== Build preview response ====
-        preview = {
+        previews.append({
             "id": parsed.get("message_id"),
             "threadId": thread_id,
-            "from": sender,
+            "from": parsed.get("sender"),
             "student_email": student.email if student else sender_email,
             "student_name": student.full_name if student else "",
             "admission_number": student.admission_number if student else "",
@@ -184,28 +192,16 @@ def gmail_unread(db: Session = Depends(get_db)):
             "year": student.year if student else "",
             "semester": student.semester if student else "",
             "group": student.group if student else "",
-            "course_group": (
-                f"{student.course} {student.year}.{student.semester} {student.group}"
-                if student else ""
-            ),
             "subject": parsed.get("subject"),
             "student_query": parsed.get("body") or "",
-            "ai_reply": ai_reply,
-            "role": "student",
-            "status": status,
-            "date": parsed.get("date"),
-            "relative_time": parsed.get("relative_time") or "unknown time",
-
-            # 🆕 Per-thread (conversation) data
             "full_thread_summary": conversation.full_thread_summary if conversation else "",
             "details_status": conversation.details_status if conversation else "empty",
             "missing_fields": conversation.missing_fields if conversation else [],
             "follow_up_message": conversation.follow_up_message if conversation else "",
-        }
-
-        previews.append(preview)
+        })
 
     return JSONResponse(previews)
+
 
 
 
@@ -342,52 +338,6 @@ class EmailBody(BaseModel):
     body_text: str
 
 
-@app.post("/students/extract")
-async def extract_student_details(data: EmailBody):
-    """
-    Extract structured student details from email body using Claude.
-    Returns JSON with admission number, course, etc.
-    """
-    prompt = f"""
-You are a precise data extractor.
-
-Extract student details from the following email text:
-
----
-{data.body_text}
----
-
-Return ONLY valid JSON with these keys:
-- name (if mentioned)
-- admission_number (e.g., S12345)
-- course (e.g., BBIT 4.2 B)
-If not found, use null.
-
-Output only valid JSON, no extra text.
-"""
-
-    try:
-        response = anthropic_client.messages.create(
-            model="claude-3-haiku-20240307",
-            max_tokens=300,
-            messages=[
-                {"role": "user", "content": prompt}
-            ],
-        )
-
-        raw_output = response.content[0].text.strip()
-
-        # Try to parse JSON safely
-        try:
-            parsed = json.loads(raw_output)
-        except json.JSONDecodeError:
-            parsed = {"error": "Claude did not return valid JSON", "raw_output": raw_output}
-
-        return parsed
-
-    except Exception as e:
-        return {"error": str(e)}
-
 # ===== Student Details Endpoint =====
 from fastapi import Depends
 from sqlalchemy.orm import Session
@@ -409,28 +359,11 @@ def get_db():
 # ===== Get Student by Email =====
 @app.get("/students/{email}")
 def get_student_by_email(email: str, db: Session = Depends(get_db)):
-    """
-    Fetch student details by email (case-insensitive),
-    including all related conversations and their per-thread info.
-    """
-
     normalized_email = email.strip().lower()
-    print(f"🔍 Looking up student with email: {normalized_email}")
-
-    # 🧩 Find the student
-    student = (
-        db.query(Student)
-        .filter(func.lower(Student.email) == normalized_email)
-        .first()
-    )
-
+    student = db.query(Student).filter(func.lower(Student.email) == normalized_email).first()
     if not student:
-        return JSONResponse(
-            {"ok": False, "error": "Student not found", "email": normalized_email},
-            status_code=404,
-        )
+        return JSONResponse({"ok": False, "error": "Student not found", "email": normalized_email}, status_code=404)
 
-    # 🗂️ Get all related conversations (most recent first)
     conversations = (
         db.query(Conversation)
         .filter(Conversation.student_id == student.id)
@@ -438,9 +371,21 @@ def get_student_by_email(email: str, db: Session = Depends(get_db)):
         .all()
     )
 
-    # 🧵 Transform conversations into clean JSON
-    convo_data = [
-        {
+    convo_data = []
+    for c in conversations:
+        # Extract details if message_body exists and details are empty
+        if c.message_body and c.details_status in [None, "", "empty"]:
+            try:
+                extracted = extract_student_details(c.message_body)  # ✅ synchronous helper
+                c.full_thread_summary = extracted.get("full_thread_summary", "")
+                c.details_status = extracted.get("details_status", "empty")
+                c.missing_fields = extracted.get("missing_fields", [])
+                c.follow_up_message = extracted.get("follow_up_message", "")
+                db.commit()
+            except Exception as e:
+                print(f"⚠️ Extraction failed for conversation {c.id}: {e}")
+
+        convo_data.append({
             "id": c.id,
             "thread_id": c.thread_id,
             "subject": c.subject,
@@ -449,11 +394,8 @@ def get_student_by_email(email: str, db: Session = Depends(get_db)):
             "missing_fields": c.missing_fields,
             "follow_up_message": c.follow_up_message,
             "last_updated": c.last_updated,
-        }
-        for c in conversations
-    ]
+        })
 
-    # 🧠 Build final structured response
     return {
         "ok": True,
         "student": {

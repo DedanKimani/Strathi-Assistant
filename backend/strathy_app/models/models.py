@@ -51,6 +51,7 @@ class Conversation(Base):
     thread_id = Column(String, unique=True, index=True)
     student_id = Column(Integer, ForeignKey("students.id"))
     subject = Column(String)
+    message_body = Column(Text, default="")  # <-- Store the raw email text
     last_updated = Column(DateTime, default=datetime.utcnow)
 
     # 🆕 Per-thread extracted fields (moved from Student)
