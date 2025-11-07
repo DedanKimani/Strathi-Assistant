@@ -208,7 +208,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             )
 
             # --- Update conversation with extracted AI metadata ---
-            from backend.strathy_app.models import Conversation
+            from backend.strathy_app.models.models import Conversation
             conversation = (
                 db.query(Conversation)
                 .filter(Conversation.thread_id == (thread_id or msg_id))
