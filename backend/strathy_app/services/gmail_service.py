@@ -149,7 +149,9 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
         parsed = parse_message(full)
         sender_header = parsed.get("sender", "")
         sender_email = _extract_email(sender_header)
-        thread_id = parsed.get("thread_id")
+        thread_id = parsed.get("thread_id")  # Gmail thread id (can be None)
+        thread_key = thread_id or msg_id     # Always have a stable id for DB + replies
+
         thread_messages = extract_thread_messages(service, thread_id) if thread_id else []
 
         if not sender_email:
@@ -194,9 +196,10 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
 
         # ✅ Extract student details & AI summary
         from backend.strathy_app.services.model_extraction_service import extract_student_details
-        ai_extraction = extract_student_details(body)
+        ai_extraction = extract_student_details(body) or {}
 
         # ✅ Save student & conversation in DB
+        student_id = None  # IMPORTANT: capture before db.close()
         db = SessionLocal()
         try:
             save_result = save_conversation_and_messages(
@@ -204,14 +207,17 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
                 email_text=body,
                 subject=subject,
                 sender_email=sender_email,
-                thread_id=thread_id or msg_id,
+                thread_id=thread_key,
             )
 
+            # ✅ Capture student_id BEFORE session closes (prevents DetachedInstanceError)
+            if save_result and save_result.get("student") is not None:
+                student_id = save_result["student"].id
+
             # --- Update conversation with extracted AI metadata ---
-            #from backend.strathy_app.models import Conversation
             conversation = (
                 db.query(Conversation)
-                .filter(Conversation.thread_id == (thread_id or msg_id))
+                .filter(Conversation.thread_id == thread_key)
                 .first()
             )
 
@@ -230,7 +236,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             "from": sender_header,
             "subject": subject,
             "body": body,
-            "threadId": thread_id
+            "threadId": thread_id,   # Gmail thread id (can be None); send_mime handles it
         })
 
         status = ai_reply_result.get("status", "pending") if ai_reply_result else "pending"
@@ -248,7 +254,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             "ai_replied_at": ai_reply_result.get("sent_at") if ai_reply_result else None,
             "ai_role": "strathy" if ai_reply_result else None,
             "thread_messages": thread_messages,
-            "student_id": save_result.get("student").id if save_result else None,
+            "student_id": student_id,
             "student_info": save_result.get("extracted") if save_result else {},
             "ai_summary": ai_extraction.get("full_thread_summary", ""),
         }
@@ -256,6 +262,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
     except Exception as exc:
         logger.exception("process_incoming_email failed: %s", exc)
         return None
+
 
 
 

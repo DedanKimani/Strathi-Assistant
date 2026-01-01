@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   Mail,
   Send,
@@ -24,6 +24,17 @@ const BRAND = {
   slate: "#0F172A",
   soft: "#F8FAFC",
 };
+function getStoredMessages(storageKey) {
+  if (typeof window === "undefined") return [];
+  try {
+    const stored = localStorage.getItem(storageKey);
+    const parsed = stored ? JSON.parse(stored) : [];
+    return Array.isArray(parsed) ? parsed : [];
+  } catch (err) {
+    console.warn("Failed to parse stored inbox data", err);
+    return [];
+  }
+}
 
 function parseEmailAddress(fromHeader = "") {
   // returns lower-case email (if any) and display name
@@ -100,18 +111,48 @@ function extractAdmissionAndGroup(body = "") {
 }
 
 export default function StrathyInbox() {
+    const storageKey = "strathyInboxMessages";
   const [loading, setLoading] = useState(false);
-  const [messages, setMessages] = useState([]);
+  const [messages, setMessages] = useState(() => getStoredMessages(storageKey));
   const [error, setError] = useState("");
-  const [selected, setSelected] = useState(null);
+  const [selected, setSelected] = useState(() => {
+      const stored = getStoredMessages(storageKey);
+    return stored[0] || null;
+  });
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
   const [filter, setFilter] = useState("");
   const [currentPage, setCurrentPage] = useState(1);
+  const messagesRef = useRef([]);
+
 
   const pageSize = 50;
 
+  const mergeMessages = (existing, incoming) => {
+    const byId = new Map(existing.map((m) => [m.id, m]));
+    incoming.forEach((msg) => {
+      const prev = byId.get(msg.id);
+      if (prev) {
+        const status =
+          prev.status && prev.status !== "new" ? prev.status : msg.status;
+        const ai_reply = prev.ai_reply || msg.ai_reply || null;
+        const ai_replied_at = prev.ai_replied_at || msg.ai_replied_at || null;
+        byId.set(msg.id, {
+          ...prev,
+          ...msg,
+          status,
+          ai_reply,
+          ai_replied_at,
+        });
+      } else {
+        byId.set(msg.id, msg);
+      }
+    });
+    return Array.from(byId.values()).sort(
+      (a, b) => new Date(b.received_at || 0) - new Date(a.received_at || 0)
+    );
+  };
   // === Fetch Unread Messages ===
   const fetchUnread = async () => {
     setError("");
@@ -181,8 +222,13 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
 });
 
   // ✅ Now continue normally
-  setMessages(normalized);
-  setSelected(normalized[0] || null);
+   const merged = mergeMessages(messagesRef.current, normalized);
+  setMessages(merged);
+  setSelected((cur) => {
+    if (!merged.length) return null;
+    if (!cur) return merged[0];
+    return merged.find((m) => m.id === cur.id) || merged[0];
+  });
   setCurrentPage(1);
 } catch (e) {
   setError(e.message || "Something went wrong");
@@ -195,6 +241,11 @@ const normalized = (Array.isArray(data) ? data : []).map((m) => {
     fetchUnread();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  useEffect(() => {
+    messagesRef.current = messages;
+    localStorage.setItem(storageKey, JSON.stringify(messages));
+  }, [messages]);
 
   // === Poll backend for updates ===
   useEffect(() => {
