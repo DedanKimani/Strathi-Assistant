@@ -31,7 +31,7 @@ class Student(Base):
     year = Column(String, nullable=True)
     semester = Column(String, nullable=True)
     group = Column(String, nullable=True)
-    email = Column(String, unique=True, index=True)
+    email = Column(String, index=True)
 
     # 🕓 Audit fields
     created_at = Column(DateTime, default=datetime.utcnow)

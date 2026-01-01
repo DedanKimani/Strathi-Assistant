@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware.sessions import SessionMiddleware
 from dotenv import load_dotenv
 from backend.strathy_app.models.models import Student, Conversation, SessionLocal  # ✅ Make sure this import is present
+from backend.strathy_app.services.student_service import create_or_update_student
+
 from backend.strathy_app.services.model_extraction_service import extract_student_details  # create this
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
@@ -154,8 +156,13 @@ def gmail_unread(db: Session = Depends(get_db)):
         thread_id = parsed.get("thread_id")
         sender_email = (parsed.get("sender") or "").split("<")[-1].strip(">").lower()
 
-        student = db.query(Student).filter(func.lower(Student.email) == sender_email).first()
         conversation = db.query(Conversation).filter(Conversation.thread_id == thread_id).first()
+        student = (
+            db.query(Student).filter(Student.id == conversation.student_id).first()
+            if conversation and conversation.student_id
+            else None
+        )
+        extracted = None
 
         if not conversation:
             conversation = Conversation(
@@ -177,6 +184,18 @@ def gmail_unread(db: Session = Depends(get_db)):
                 conversation.details_status = extracted.get("details_status", "empty")
                 conversation.missing_fields = extracted.get("missing_fields", [])
                 conversation.follow_up_message = extracted.get("follow_up_message", "")
+                if not student and extracted.get("admission_number"):
+                    student_payload = {
+                        "full_name": extracted.get("full_name"),
+                        "admission_number": extracted.get("admission_number"),
+                        "course": extracted.get("course"),
+                        "year": extracted.get("year"),
+                        "semester": extracted.get("semester"),
+                        "group": extracted.get("group"),
+                        "email": sender_email,
+                    }
+                    student = create_or_update_student(db, student_payload)
+                    conversation.student_id = student.id
                 db.commit()
             except Exception as e:
                 print(f"⚠️ Extraction failed for conversation {conversation.id}: {e}")
@@ -186,12 +205,12 @@ def gmail_unread(db: Session = Depends(get_db)):
             "threadId": thread_id,
             "from": parsed.get("sender"),
             "student_email": student.email if student else sender_email,
-            "student_name": student.full_name if student else "",
-            "admission_number": student.admission_number if student else "",
-            "course": student.course if student else "",
-            "year": student.year if student else "",
-            "semester": student.semester if student else "",
-            "group": student.group if student else "",
+            "student_name": student.full_name if student else (extracted.get("full_name") if extracted else ""),
+            "admission_number": student.admission_number if student else (extracted.get("admission_number") if extracted else ""),
+            "course": student.course if student else (extracted.get("course") if extracted else ""),
+            "year": student.year if student else (extracted.get("year") if extracted else ""),
+            "semester": student.semester if student else (extracted.get("semester") if extracted else ""),
+            "group": student.group if student else (extracted.get("group") if extracted else ""),
             "subject": parsed.get("subject"),
             "student_query": parsed.get("body") or "",
             "full_thread_summary": conversation.full_thread_summary if conversation else "",
@@ -223,7 +242,8 @@ def gmail_last_reply():
 
     # === Fetch student details ===
     db = SessionLocal()
-    student = db.query(Student).filter(Student.email == result.get("from_email")).first()
+    student_id = result.get("student_id")
+    student = db.query(Student).filter(Student.id == student_id).first() if student_id else None
     db.close()
 
     student_data = None

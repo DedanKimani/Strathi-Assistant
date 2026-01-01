@@ -28,7 +28,7 @@ def save_conversation_and_messages(db: Session, email_text: str, subject: str, s
     }
 
     # 🏫 Create or update Student record
-    student = create_or_update_student(db, student_data)
+    student = create_or_update_student(db, student_data, thread_id=thread_id)
 
     # 🎯 Find or create Conversation record (thread-level)
     convo = (

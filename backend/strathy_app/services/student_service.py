@@ -7,7 +7,12 @@ import json
 def get_student_by_email(db: Session, email: str):
     return db.query(Student).filter(Student.email == email).first()
 
-
+def get_student_by_admission_number(db: Session, admission_number: str):
+    return (
+        db.query(Student)
+        .filter(Student.admission_number == admission_number)
+        .first()
+    )
 def create_or_update_student(db: Session, data: dict, thread_id: str = None):
     """
     Create or update a student record.
@@ -18,7 +23,13 @@ def create_or_update_student(db: Session, data: dict, thread_id: str = None):
     if not data.get("email"):
         raise ValueError("Email is required")
 
-    student = get_student_by_email(db, data["email"])
+    admission_number = data.get("admission_number")
+    student = None
+
+    if admission_number:
+        student = get_student_by_admission_number(db, admission_number)
+    if not student:
+        student = get_student_by_email(db, data["email"])
 
     # Normalize missing_fields if provided as list or JSON string
     if "missing_fields" in data and data["missing_fields"] is not None:

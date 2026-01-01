@@ -208,7 +208,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             )
 
             # --- Update conversation with extracted AI metadata ---
-            from backend.strathy_app.models import Conversation
+            #from backend.strathy_app.models import Conversation
             conversation = (
                 db.query(Conversation)
                 .filter(Conversation.thread_id == (thread_id or msg_id))
@@ -248,6 +248,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             "ai_replied_at": ai_reply_result.get("sent_at") if ai_reply_result else None,
             "ai_role": "strathy" if ai_reply_result else None,
             "thread_messages": thread_messages,
+            "student_id": save_result.get("student").id if save_result else None,
             "student_info": save_result.get("extracted") if save_result else {},
             "ai_summary": ai_extraction.get("full_thread_summary", ""),
         }
