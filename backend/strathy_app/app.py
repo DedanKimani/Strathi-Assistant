@@ -32,6 +32,8 @@ from .services.gmail_service import (
     process_incoming_email,
     get_ai_reply_for_thread,
     is_sender_allowed,
+    extract_thread_messages,
+
 )
 from .utils.email_parser import parse_message
 from .utils.mime_helpers import build_reply_mime
@@ -145,7 +147,9 @@ def gmail_unread(db: Session = Depends(get_db)):
 
     service = build_gmail_service(creds)
     msgs = list_unread_messages(service, max_results=100)
-    previews = []
+
+    # ✅ NEW: group unread messages by Gmail threadId
+    latest_by_thread = {}  # threadId -> {"full": msg_json, "parsed": parsed, "ts": int}
 
     for m in msgs:
         full = get_message(service, m["id"])
@@ -153,7 +157,22 @@ def gmail_unread(db: Session = Depends(get_db)):
             continue
 
         parsed = parse_message(full)
-        thread_id = parsed.get("thread_id")
+        thread_id = full.get("threadId") or parsed.get("thread_id")
+        if not thread_id:
+            continue
+
+        ts = int(full.get("internalDate", "0") or 0)
+
+        # Keep the latest unread message per thread as the preview
+        if thread_id not in latest_by_thread or ts > latest_by_thread[thread_id]["ts"]:
+            latest_by_thread[thread_id] = {"full": full, "parsed": parsed, "ts": ts}
+
+    previews = []
+
+    for thread_id, item in latest_by_thread.items():
+        full = item["full"]
+        parsed = item["parsed"]
+
         sender_email = (parsed.get("sender") or "").split("<")[-1].strip(">").lower()
 
         conversation = db.query(Conversation).filter(Conversation.thread_id == thread_id).first()
@@ -162,21 +181,22 @@ def gmail_unread(db: Session = Depends(get_db)):
             if conversation and conversation.student_id
             else None
         )
-        extracted = None
 
+        # ✅ Save/update conversation preview (latest body/subject)
         if not conversation:
             conversation = Conversation(
                 student_id=student.id if student else None,
                 thread_id=thread_id,
                 subject=parsed.get("subject"),
-                message_body=parsed.get("body")  # <- SAVE the email body here
+                message_body=parsed.get("body") or "",
             )
             db.add(conversation)
         else:
-            conversation.message_body = parsed.get("body")  # <- update existing row
+            conversation.subject = parsed.get("subject") or conversation.subject
+            conversation.message_body = parsed.get("body") or conversation.message_body
         db.commit()
 
-        # Auto-extract if message_body exists and details are missing
+        extracted = None
         if conversation and conversation.message_body and conversation.details_status in [None, "", "empty"]:
             try:
                 extracted = extract_student_details(conversation.message_body)
@@ -184,6 +204,7 @@ def gmail_unread(db: Session = Depends(get_db)):
                 conversation.details_status = extracted.get("details_status", "empty")
                 conversation.missing_fields = extracted.get("missing_fields", [])
                 conversation.follow_up_message = extracted.get("follow_up_message", "")
+
                 if not student and extracted.get("admission_number"):
                     student_payload = {
                         "full_name": extracted.get("full_name"),
@@ -196,9 +217,13 @@ def gmail_unread(db: Session = Depends(get_db)):
                     }
                     student = create_or_update_student(db, student_payload)
                     conversation.student_id = student.id
+
                 db.commit()
             except Exception as e:
                 print(f"⚠️ Extraction failed for conversation {conversation.id}: {e}")
+
+        # ✅ OPTIONAL but helpful: include full thread history for chat UI
+        thread_messages = extract_thread_messages(service, thread_id)
 
         previews.append({
             "id": parsed.get("message_id"),
@@ -217,7 +242,11 @@ def gmail_unread(db: Session = Depends(get_db)):
             "details_status": conversation.details_status if conversation else "empty",
             "missing_fields": conversation.missing_fields if conversation else [],
             "follow_up_message": conversation.follow_up_message if conversation else "",
+            "thread_messages": thread_messages,  # ✅ the continuous back-and-forth
         })
+
+    # Sort previews by latest timestamp (newest first)
+    previews.sort(key=lambda x: latest_by_thread.get(x["threadId"], {}).get("ts", 0), reverse=True)
 
     return JSONResponse(previews)
 

@@ -145,12 +145,13 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
         full = get_message(service, msg_id)
         if not full:
             return None
+        original_headers = (full.get("payload", {}) or {}).get("headers", []) or []
 
         parsed = parse_message(full)
         sender_header = parsed.get("sender", "")
         sender_email = _extract_email(sender_header)
-        thread_id = parsed.get("thread_id")  # Gmail thread id (can be None)
-        thread_key = thread_id or msg_id     # Always have a stable id for DB + replies
+        thread_id = full.get("threadId") or parsed.get("thread_id")
+        thread_key = thread_id or msg_id
 
         thread_messages = extract_thread_messages(service, thread_id) if thread_id else []
 
@@ -237,6 +238,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             "subject": subject,
             "body": body,
             "threadId": thread_id,   # Gmail thread id (can be None); send_mime handles it
+            "original_headers": original_headers,
         })
 
         status = ai_reply_result.get("status", "pending") if ai_reply_result else "pending"
@@ -264,8 +266,6 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
         return None
 
 
-
-
 def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
     try:
         sender_header = student_msg.get("from", "")
@@ -278,6 +278,9 @@ def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
         reply_subject = subject if subject.lower().startswith("re:") else f"Re: {subject}"
         body = student_msg.get("body", "")
         thread_id = student_msg.get("threadId")
+
+        # ✅ NEW: original headers from the incoming email (for In-Reply-To + References)
+        original_headers = student_msg.get("original_headers") or []
 
         sender_name = (
             sender_header.split("<")[0].strip().replace('"', "")
@@ -296,14 +299,16 @@ def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
             logger.warning("⚠️ AI did not generate a reply for %s", sender_email)
             return {"status": "pending", "ai_reply": None, "sent_at": None}
 
-        # 📨 Actually send the reply email
-        sent = send_mime(service, build_reply_mime(
+        # 📨 Send reply WITH threading headers
+        mime_msg = build_reply_mime(
             to_email=sender_email,
             subject=reply_subject,
             body_text=ai_reply_text,
-            in_reply_to=[],
-            original_headers=[],
-        ), thread_id=thread_id)
+            in_reply_to=original_headers,
+            original_headers=original_headers,
+        )
+
+        sent = send_mime(service, mime_msg, thread_id=thread_id)
 
         sent_at = datetime.now(timezone.utc).isoformat()
         return {

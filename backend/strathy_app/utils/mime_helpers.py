@@ -25,8 +25,12 @@ def build_reply_mime(
       - References (chain: previous References + original Message-Id)
     NOTE: Returns an EmailMessage object, not base64-encoded.
     """
-    orig_msg_id = _get_header(original_headers, "Message-Id") or _get_header(original_headers, "Message-ID")
-    prev_refs = _get_header(original_headers, "References")
+    orig_msg_id = (
+            _get_header(original_headers, "Message-Id")
+            or _get_header(original_headers, "Message-ID")
+            or _get_header(original_headers, "message-id")
+    )
+    prev_refs = _get_header(original_headers, "References") or _get_header(original_headers, "references")
 
     msg = EmailMessage()
     msg["To"] = to_email
