@@ -137,19 +137,21 @@ def is_sender_allowed(email: str) -> bool:
 # Core Processing
 # ===========================
 def process_incoming_email(service, message: Dict) -> Optional[Dict]:
-    try:
-        msg_id = message.get("id")
-        if not msg_id:
-            return None
+    msg_id = message.get("id")
+    if not msg_id:
+        return None
 
+    try:
         full = get_message(service, msg_id)
         if not full:
             return None
+
         original_headers = (full.get("payload", {}) or {}).get("headers", []) or []
 
         parsed = parse_message(full)
         sender_header = parsed.get("sender", "")
         sender_email = _extract_email(sender_header)
+
         thread_id = full.get("threadId") or parsed.get("thread_id")
         thread_key = thread_id or msg_id
 
@@ -167,18 +169,19 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             if internal_date else None
         )
 
-        # Mark message as read
-        try:
-            service.users().messages().modify(
-                userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
-            ).execute()
-        except HttpError as e:
-            logger.warning("Failed to clear UNREAD for %s: %s", msg_id, e)
-
-        # 🚫 Skip disallowed senders
+        # 🚫 Skip disallowed senders (do NOT mark read automatically by default)
         if not is_sender_allowed(sender_email):
             reason = "Blocked sender" if sender_email in BLOCKED_EMAILS else "External domain not allowed"
             logger.info(f"⛔ Skipping AI reply to {sender_email} ({reason})")
+
+            # OPTIONAL: if you want blocked messages to disappear from UI, uncomment:
+            # try:
+            #     service.users().messages().modify(
+            #         userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
+            #     ).execute()
+            # except HttpError as e:
+            #     logger.warning("Failed to clear UNREAD for blocked %s: %s", msg_id, e)
+
             return {
                 "id": msg_id,
                 "threadId": thread_id,
@@ -200,7 +203,9 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
         ai_extraction = extract_student_details(body) or {}
 
         # ✅ Save student & conversation in DB
-        student_id = None  # IMPORTANT: capture before db.close()
+        student_id = None
+        save_result = None
+
         db = SessionLocal()
         try:
             save_result = save_conversation_and_messages(
@@ -211,7 +216,6 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
                 thread_id=thread_key,
             )
 
-            # ✅ Capture student_id BEFORE session closes (prevents DetachedInstanceError)
             if save_result and save_result.get("student") is not None:
                 student_id = save_result["student"].id
 
@@ -229,19 +233,31 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
                 conversation.follow_up_message = ai_extraction.get("follow_up_message", "")
                 db.commit()
 
+        except Exception:
+            # ✅ critical: rollback so this thread can be retried cleanly
+            db.rollback()
+            raise
         finally:
             db.close()
 
-        # ✅ Generate AI reply (only if allowed)
+        # ✅ Generate AI reply
         ai_reply_result = generate_and_send_ai_reply(service, {
             "from": sender_header,
             "subject": subject,
             "body": body,
-            "threadId": thread_id,   # Gmail thread id (can be None); send_mime handles it
+            "threadId": thread_id,
             "original_headers": original_headers,
         })
 
         status = ai_reply_result.get("status", "pending") if ai_reply_result else "pending"
+
+        # ✅ Only now mark as read, after DB + reply attempt succeeded
+        try:
+            service.users().messages().modify(
+                userId="me", id=msg_id, body={"removeLabelIds": ["UNREAD"]}
+            ).execute()
+        except HttpError as e:
+            logger.warning("Failed to clear UNREAD for %s: %s", msg_id, e)
 
         return {
             "id": msg_id,
@@ -263,6 +279,7 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
 
     except Exception as exc:
         logger.exception("process_incoming_email failed: %s", exc)
+        # ✅ do NOT mark read on failure — leave it unread so you can retry
         return None
 
 

@@ -23,9 +23,29 @@ def create_or_update_student(db: Session, data: dict, thread_id: str = None):
     if not data.get("email"):
         raise ValueError("Email is required")
 
+    # ✅ Normalize common "empty" values
+    def _clean_str(x):
+        if x is None:
+            return None
+        if isinstance(x, str):
+            x = x.strip()
+            return x if x else None
+        return x
+
+    # Clean important fields
+    data = dict(data)  # copy so we don't mutate caller
+    data["email"] = _clean_str(data.get("email"))
+    data["full_name"] = _clean_str(data.get("full_name"))
+    data["admission_number"] = _clean_str(data.get("admission_number"))
+    data["course"] = _clean_str(data.get("course"))
+    data["year"] = _clean_str(data.get("year"))
+    data["semester"] = _clean_str(data.get("semester"))
+    data["group"] = _clean_str(data.get("group"))
+
     admission_number = data.get("admission_number")
     student = None
 
+    # Prefer lookup by admission number if present
     if admission_number:
         student = get_student_by_admission_number(db, admission_number)
     if not student:
@@ -53,17 +73,21 @@ def create_or_update_student(db: Session, data: dict, thread_id: str = None):
         "email",
     }
 
-    student_data = {k: v for k, v in data.items() if k in student_fields}
+    student_data = {k: data.get(k) for k in student_fields}
 
     if student:
+        # ✅ Only update fields if we have a non-empty value
+        # ✅ Never overwrite an existing admission_number with None/blank
         for key, value in student_data.items():
-            if value is not None:
-                setattr(student, key, value)
+            if value is None:
+                continue
+            if key == "admission_number" and not value:
+                continue
+            setattr(student, key, value)
     else:
-        student = Student(**student_data)
+        # ✅ If admission_number is None, that's okay — but DO NOT set empty string
+        student = Student(**{k: v for k, v in student_data.items() if v is not None})
         db.add(student)
-        db.commit()
-        db.refresh(student)
 
     # --- Handle Conversation fields if thread_id provided ---
     if thread_id:
@@ -73,8 +97,7 @@ def create_or_update_student(db: Session, data: dict, thread_id: str = None):
             "follow_up_message",
             "full_thread_summary",
         }
-
-        convo_data = {k: v for k, v in data.items() if k in convo_fields}
+        convo_data = {k: v for k, v in data.items() if k in convo_fields and v is not None}
 
         if convo_data:
             conversation = (
@@ -85,15 +108,15 @@ def create_or_update_student(db: Session, data: dict, thread_id: str = None):
 
             if not conversation:
                 conversation = Conversation(
-                    student_id=student.id,
+                    student_id=student.id if student.id else None,
                     thread_id=thread_id,
                 )
                 db.add(conversation)
 
             for key, value in convo_data.items():
-                if value is not None:
-                    setattr(conversation, key, value)
+                setattr(conversation, key, value)
 
+    # ✅ Commit once at end
     db.commit()
     db.refresh(student)
     return student
