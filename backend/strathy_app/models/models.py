@@ -78,7 +78,7 @@ class Message(Base):
     sender_name = Column(String)
     subject = Column(String)
     body = Column(Text)
-    role = Column(String)  # 'student' or 'strathy'
+    role = Column(String)  # 'student' or 'ADAM'
     sent_at = Column(DateTime, default=datetime.utcnow)
 
     conversation = relationship("Conversation", back_populates="messages")

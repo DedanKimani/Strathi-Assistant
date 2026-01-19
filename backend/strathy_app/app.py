@@ -84,7 +84,7 @@ def _load_creds() -> Optional[Credentials]:
 # ====== Routes ======
 @app.get("/")
 def index():
-    return {"ok": True, "message": "Strathy Gmail Automation API is running."}
+    return {"ok": True, "message": "ADAM Gmail Automation API is running."}
 
 
 @app.get("/oauth2/login")
@@ -460,3 +460,14 @@ def get_student_by_email(email: str, db: Session = Depends(get_db)):
         },
         "conversations": convo_data,
     }
+
+@app.get("/threads/{thread_id}")
+def get_thread(thread_id: str):
+    creds = _load_creds()
+    if not creds:
+        return JSONResponse({"ok": False, "message": "Not logged in"}, status_code=401)
+
+    service = build_gmail_service(creds)
+    msgs = extract_thread_messages(service, thread_id)
+
+    return {"ok": True, "threadId": thread_id, "messages": msgs}

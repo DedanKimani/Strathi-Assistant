@@ -265,12 +265,12 @@ def process_incoming_email(service, message: Dict) -> Optional[Dict]:
             "from": sender_header,
             "subject": subject,
             "body": body,
-            "role": "student",
+            "role": "Student",
             "status": status,
             "received_at": received_at,
             "ai_reply": ai_reply_result.get("ai_reply") if ai_reply_result else None,
             "ai_replied_at": ai_reply_result.get("sent_at") if ai_reply_result else None,
-            "ai_role": "strathy" if ai_reply_result else None,
+            "ai_role": "ADAM" if ai_reply_result else None,
             "thread_messages": thread_messages,
             "student_id": student_id,
             "student_info": save_result.get("extracted") if save_result else {},
@@ -332,12 +332,12 @@ def generate_and_send_ai_reply(service, student_msg: Dict) -> Optional[Dict]:
             "status": "replied" if sent else "pending",
             "threadId": thread_id,
             "to": sender_email,
-            "from": "strathy@strathmore.edu",
+            "from": "dedan.kimani@strathmore.edu",
             "subject": reply_subject,
             "ai_reply": ai_reply_text,
             "sent_id": sent.get("id") if sent else None,
             "sent_at": sent_at if sent else None,
-            "role": "strathy"
+            "role": "ADAM"
         }
 
     except Exception as exc:
@@ -353,7 +353,7 @@ def get_ai_reply_for_thread(service, thread_id: str) -> Optional[str]:
         for msg in reversed(messages):  # newest first
             parsed = parse_message(msg)
             sender_header = parsed.get("sender", "")
-            if sender_header and "strathy@strathmore.edu" in sender_header.lower():
+            if sender_header and "dedan.kimani@strathmore.edu" in sender_header.lower():
                 return parsed.get("body")
         return None
     except HttpError as e:
@@ -371,7 +371,10 @@ def extract_thread_messages(service, thread_id: str) -> List[Dict]:
             parsed = parse_message(msg)
             sender_header = parsed.get("sender", "")
             sender_email = _extract_email(sender_header)
-            role = "strathy" if sender_email and "strathy@strathmore.edu" in sender_email.lower() else "student"
+
+            label_ids = msg.get("labelIds") or []
+            role = "ADAM" if "SENT" in label_ids else "Student"
+
             extracted.append({
                 "id": msg.get("id"),
                 "sender": sender_header,

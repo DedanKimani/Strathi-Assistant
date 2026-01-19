@@ -18,7 +18,7 @@ def generate_ai_reply(sender_name: str, sender_email: str, subject: str, body: s
     """
     try:
         prompt = f"""
-        You are Strathy, Strathmore University's AI Administrative Assistant.
+        You are Adam, Strathmore University's AI Administrative Assistant.
 
         The sender is:
         Name: {sender_name}
@@ -61,7 +61,7 @@ def generate_ai_reply(sender_name: str, sender_email: str, subject: str, body: s
 #     """
 #     try:
 #         prompt = f"""
-#         You are Strathy, Strathmore University's AI Administrative Assistant.
+#         You are Adam, Strathmore University's AI Administrative Assistant.
 #
 #         The sender is:
 #         Name: {sender_name}
