@@ -130,12 +130,11 @@ function extractAdmissionAndGroup(body = "") {
 export default function StrathyInbox() {
   const storageKey = "strathyInboxThreads";
   const [loading, setLoading] = useState(false);
-  const [messages, setMessages] = useState(() => getStoredMessages(storageKey));
-  const [error, setError] = useState("");
-  const [selected, setSelected] = useState(() => {
-    const stored = getStoredMessages(storageKey);
-    return stored[0] || null;
-  });
+
+const [messages, setMessages] = useState([]);
+const [error, setError] = useState("");
+const [selected, setSelected] = useState(null);
+
   const [reply, setReply] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState(false);
@@ -279,14 +278,22 @@ export default function StrathyInbox() {
         };
       });
 
-      const merged = mergeMessages(messagesRef.current, normalized);
-      setMessages(merged);
-      setSelected((cur) => {
-        if (!merged.length) return null;
-        if (!cur) return merged[0];
-        return merged.find((m) => m.id === cur.id) || merged[0];
-      });
-      setCurrentPage(1);
+      setMessages((prev) => {
+  const merged = mergeMessages(prev, normalized);
+
+  // keep selected stable
+  setSelected((cur) => {
+    if (!merged.length) return null;
+    if (!cur) return merged[0];
+    return merged.find((m) => m.threadId === cur.threadId) || merged[0];
+  });
+
+  return merged;
+});
+
+setCurrentPage(1);
+
+
     } catch (e) {
       setError(e.message || "Something went wrong");
     } finally {
@@ -298,35 +305,88 @@ const pollLastReply = async () => {
   try {
     const res = await fetch("/gmail/last-reply");
     if (!res.ok) return;
+
     const data = await res.json();
 
-    if (!data.ok || !data.ai_reply || !data.threadId) return;
+    // expected (any combo): { ok, ai_reply, threadId, subject, sent_at }
+    if (!data?.ok || !data?.ai_reply) return;
 
-    // Update inbox list
+    const replyText = String(data.ai_reply || "").trim();
+    if (!replyText) return;
+
+    const matchByThread = (m) =>
+      data.threadId && (m.threadId === data.threadId || m.id === data.threadId);
+
+    const matchBySubject = (m) =>
+      data.subject && (m.subject || "").trim() === String(data.subject).trim();
+
+    const shouldMatch = (m) => matchByThread(m) || matchBySubject(m);
+
+    // ✅ Update inbox list + append to thread_messages
     setMessages((prev) =>
-      prev.map((m) =>
-        m.threadId === data.threadId
-          ? {
-              ...m,
-              ai_reply: data.ai_reply,
-              ai_replied_at: data.sent_at || new Date().toISOString(),
-              status: "replied",
-            }
-          : m
-      )
+      prev.map((m) => {
+        if (!shouldMatch(m)) return m;
+
+        const existing = Array.isArray(m.thread_messages) ? m.thread_messages : [];
+
+        // prevent duplicate ADAM reply
+        const alreadyHas = existing.some(
+          (x) =>
+            (x.role || "").toUpperCase() === "ADAM" &&
+            (x.body || "").trim() === replyText
+        );
+
+        const updatedThread = alreadyHas
+          ? existing
+          : [
+              ...existing,
+              {
+                id: `adam-${(data.threadId || m.threadId || m.id)}-${data.sent_at || Date.now()}`,
+                role: "ADAM",
+                body: replyText,
+                date: data.sent_at || new Date().toISOString(),
+              },
+            ];
+
+        return {
+          ...m,
+          ai_reply: replyText,
+          ai_replied_at: data.sent_at || new Date().toISOString(),
+          status: "replied",
+          thread_messages: updatedThread,
+        };
+      })
     );
 
-    // Update selected panel
-    setSelected((cur) =>
-      cur && cur.threadId === data.threadId
-        ? {
-            ...cur,
-            ai_reply: data.ai_reply,
-            ai_replied_at: data.sent_at || new Date().toISOString(),
-            status: "replied",
-          }
-        : cur
-    );
+    // ✅ Update selected panel too
+    setSelected((cur) => {
+      if (!cur || !shouldMatch(cur)) return cur;
+
+      const existing = Array.isArray(cur.thread_messages) ? cur.thread_messages : [];
+      const alreadyHas = existing.some(
+        (x) =>
+          (x.role || "").toUpperCase() === "ADAM" &&
+          (x.body || "").trim() === replyText
+      );
+
+      return {
+        ...cur,
+        ai_reply: replyText,
+        ai_replied_at: data.sent_at || new Date().toISOString(),
+        status: "replied",
+        thread_messages: alreadyHas
+          ? existing
+          : [
+              ...existing,
+              {
+                id: `adam-${(data.threadId || cur.threadId || cur.id)}-${data.sent_at || Date.now()}`,
+                role: "ADAM",
+                body: replyText,
+                date: data.sent_at || new Date().toISOString(),
+              },
+            ],
+      };
+    });
   } catch (err) {
     console.error("pollLastReply failed", err);
   }
@@ -337,10 +397,13 @@ const pollLastReply = async () => {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
-  useEffect(() => {
-    messagesRef.current = messages;
-    localStorage.setItem(storageKey, JSON.stringify(messages));
-  }, [messages]);
+//   useEffect(() => {
+//     messagesRef.current = messages;
+//     localStorage.setItem(storageKey, JSON.stringify(messages));
+//   }, [messages]);
+useEffect(() => {
+  messagesRef.current = messages;
+}, [messages]);
 
   // ✅ Poll by refreshing the inbox (thread-safe)
   useEffect(() => {
@@ -724,7 +787,7 @@ const pollLastReply = async () => {
                           <div
                               className={`w-full sm:w-[520px] md:w-[620px] lg:w-[1100px] rounded-xl border p-3 text-sm ${
                                   isAI
-                                  ? "bg-grey-50 border-grey-200"
+                                  ? "bg-gray-50 border-gray-200"
                                   : "bg-blue-50 border-blue-200"
                             }`}
                           >
