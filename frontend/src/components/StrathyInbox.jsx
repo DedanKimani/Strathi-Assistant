@@ -698,7 +698,7 @@ useEffect(() => {
                     </div>
 
                     {selected.full_thread_summary && (
-                      <div className="bg-slate-50 p-3 rounded relative border border-slate-200 mt-4">
+                      <div className="bg-slate-50 p-3 rounded relative border border-slate-200 mt-4 lg:w-[1030px]">
                         <div className="text-[11px] text-slate-500 mb-1 flex justify-between items-center">
                           <span>Full Thread Summary</span>
                           <button
